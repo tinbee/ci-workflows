@@ -1,0 +1,143 @@
+name: Deploy to S3 + CloudFront (reusable)
+
+# Reusable workflow for "deploy a static site to AWS S3 + CloudFront."
+# Consumer repos call this with:
+#   uses: tinbee/ci-workflows/.github/workflows/deploy-s3-cloudfront.yml@v1
+# See README.md for the full caller shape and migration examples.
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: "Node version passed to actions/setup-node."
+        type: string
+        default: "24"
+      build_command:
+        description: "Optional pre-deploy script. Multi-line bash allowed. Runs after Node/pnpm setup, before AWS auth."
+        type: string
+        default: ""
+      source_dir:
+        description: "Directory to sync to S3. Defaults to dist/ (Vite/SSG convention)."
+        type: string
+        default: "dist/"
+      sync_excludes:
+        description: "Newline-separated list of S3 sync --exclude patterns."
+        type: string
+        default: ""
+      content_type_fixups:
+        description: 'JSON array of per-extension Content-Type overrides. Example: [{"ext":".ics","content_type":"text/calendar; charset=utf-8","cache_control":"public, max-age=3600"}]'
+        type: string
+        default: ""
+      invalidation_paths:
+        description: "Space-separated CloudFront invalidation paths."
+        type: string
+        default: "/*"
+      aws_region:
+        description: "AWS region (e.g. us-east-1)."
+        type: string
+        required: true
+    secrets:
+      role_to_assume:
+        description: "IAM role ARN to assume via OIDC."
+        required: true
+      s3_bucket:
+        description: "Target S3 bucket name (no s3:// prefix)."
+        required: true
+      cloudfront_distribution:
+        description: "CloudFront distribution ID."
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: pnpm
+
+      - name: Build
+        if: inputs.build_command != ''
+        shell: bash
+        run: ${{ inputs.build_command }}
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.role_to_assume }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Sync to S3
+        shell: bash
+        env:
+          BUCKET: ${{ secrets.s3_bucket }}
+          SOURCE: ${{ inputs.source_dir }}
+          EXCLUDES: ${{ inputs.sync_excludes }}
+        run: |
+          set -euo pipefail
+          excludes=()
+          if [ -n "$EXCLUDES" ]; then
+            while IFS= read -r line; do
+              line=$(echo "$line" | xargs)
+              [ -z "$line" ] && continue
+              excludes+=(--exclude "$line")
+            done <<< "$EXCLUDES"
+          fi
+          aws s3 sync "$SOURCE" "s3://${BUCKET}" --delete "${excludes[@]}"
+
+      - name: Apply Content-Type fixups
+        if: inputs.content_type_fixups != ''
+        shell: bash
+        env:
+          BUCKET: ${{ secrets.s3_bucket }}
+          SOURCE: ${{ inputs.source_dir }}
+          FIXUPS: ${{ inputs.content_type_fixups }}
+        run: |
+          set -euo pipefail
+          count=$(echo "$FIXUPS" | jq 'length')
+          for i in $(seq 0 $((count - 1))); do
+            ext=$(echo "$FIXUPS" | jq -r ".[$i].ext")
+            ctype=$(echo "$FIXUPS" | jq -r ".[$i].content_type")
+            ccontrol=$(echo "$FIXUPS" | jq -r ".[$i].cache_control // empty")
+            shopt -s nullglob
+            for f in "$SOURCE"/*"$ext"; do
+              name=$(basename "$f")
+              extra=()
+              if [ -n "$ccontrol" ]; then
+                extra+=(--cache-control "$ccontrol")
+              fi
+              aws s3 cp "$f" "s3://${BUCKET}/$name" \
+                --content-type "$ctype" \
+                "${extra[@]}" \
+                --metadata-directive REPLACE
+            done
+          done
+
+      - name: Invalidate CloudFront
+        shell: bash
+        env:
+          DIST_ID: ${{ secrets.cloudfront_distribution }}
+          PATHS: ${{ inputs.invalidation_paths }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086  # PATHS is intentionally word-split for multiple invalidation paths
+          INV_ID=$(aws cloudfront create-invalidation \
+            --distribution-id "${DIST_ID}" \
+            --paths $PATHS \
+            --query 'Invalidation.Id' \
+            --output text)
+          echo "Created invalidation: ${INV_ID}"
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "${DIST_ID}" \
+            --id "${INV_ID}"
+          echo "Invalidation complete."
