@@ -1,6 +1,6 @@
 # ci-workflows
 
-Reusable GitHub Actions workflows for `tinbee` + `mkurtay` repos. Single source of truth for action versions and CI/CD step shapes — bump an action here once, every consumer picks it up on their next run.
+Reusable GitHub Actions workflows for `tinbee` and other repos. Single source of truth for action versions and CI/CD step shapes — bump an action here once, every consumer picks it up on their next run.
 
 Public so any org's repo can consume it. Reusable workflows in private repos can only be called from the same org; making this public is the standard pattern for cross-org sharing.
 
