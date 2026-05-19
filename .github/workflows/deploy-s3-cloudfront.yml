@@ -1,6 +1,11 @@
 name: Deploy to S3 + CloudFront (reusable)
 
 # Reusable workflow for "deploy a static site to AWS S3 + CloudFront."
+# Defaults are SPA-first (Vite/Astro/Next-style hashed assets) — see
+# `cache_control_overrides` and `invalidation_paths` defaults below.
+# Legacy static-site consumers (root-served *.html, *.ics, etc.) should
+# explicitly pass empty cache overrides and `invalidation_paths: "/*"`.
+#
 # Consumer repos call this with:
 #   uses: tinbee/ci-workflows/.github/workflows/deploy-s3-cloudfront.yml@v1
 # See README.md for the full caller shape and migration examples.
@@ -29,11 +34,23 @@ on:
         type: string
         default: ""
       invalidation_paths:
-        description: "Space-separated CloudFront invalidation paths."
+        description: "Space-separated CloudFront invalidation paths. Default `/ /index.html` is the SPA pattern (hashed assets never need invalidating). Legacy static sites with root-served HTML/other files should pass `/*` to invalidate everything."
         type: string
-        default: "/*"
+        default: "/ /index.html"
+      cache_control_overrides:
+        description: 'JSON array of per-path-pattern Cache-Control overrides, applied as separate `aws s3 sync` passes before the default sync. Each entry: {"path_pattern":"assets/*","cache_control":"public, max-age=31536000, immutable"}. Default targets Vite/SPA hashed `assets/*` directory. Pass empty string to disable multi-pass sync entirely.'
+        type: string
+        default: '[{"path_pattern":"assets/*","cache_control":"public, max-age=31536000, immutable"}]'
+      default_cache_control:
+        description: "Cache-Control header for files NOT matched by any cache_control_overrides entry. Default is SPA-friendly (force revalidation on every request). Pass empty string to omit the header entirely (S3 default behavior — no Cache-Control sent)."
+        type: string
+        default: "public, max-age=0, must-revalidate"
+      env_json:
+        description: 'JSON object of env vars exported to all subsequent steps via $GITHUB_ENV. Use for build-time config (e.g. VITE_*, NEXT_PUBLIC_*). Example: {"VITE_API_URL":"https://api.example.com","VITE_SITE_ID":"abc123"}.'
+        type: string
+        default: "{}"
       aws_region:
-        description: "AWS region (e.g. us-east-1)."
+        description: "AWS region (e.g. us-east-1). MUST come from vars/literal — secrets context is forbidden in `with:`."
         type: string
         required: true
       setup_pnpm:
@@ -84,6 +101,17 @@ jobs:
         with:
           node-version: ${{ inputs.node_version }}
 
+      - name: Set env from env_json input
+        if: inputs.env_json != '{}' && inputs.env_json != ''
+        shell: bash
+        env:
+          ENV_JSON: ${{ inputs.env_json }}
+        run: |
+          set -euo pipefail
+          # Export each key/value from the JSON object into $GITHUB_ENV
+          # so subsequent steps (including Build) see them as plain env.
+          echo "$ENV_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> "$GITHUB_ENV"
+
       - name: Build
         if: inputs.build_command != ''
         shell: bash
@@ -95,23 +123,58 @@ jobs:
           role-to-assume: ${{ secrets.role_to_assume }}
           aws-region: ${{ inputs.aws_region }}
 
-      - name: Sync to S3
+      - name: Sync to S3 (multi-pass with cache-control overrides)
         shell: bash
         env:
           BUCKET: ${{ secrets.s3_bucket }}
           SOURCE: ${{ inputs.source_dir }}
           EXCLUDES: ${{ inputs.sync_excludes }}
+          OVERRIDES: ${{ inputs.cache_control_overrides }}
+          DEFAULT_CC: ${{ inputs.default_cache_control }}
         run: |
           set -euo pipefail
-          excludes=()
+
+          # User-supplied --exclude patterns apply to EVERY sync pass
+          # (override passes use them on top of their own --exclude "*").
+          user_excludes=()
           if [ -n "$EXCLUDES" ]; then
             while IFS= read -r line; do
               line=$(echo "$line" | xargs)
               [ -z "$line" ] && continue
-              excludes+=(--exclude "$line")
+              user_excludes+=(--exclude "$line")
             done <<< "$EXCLUDES"
           fi
-          aws s3 sync "$SOURCE" "s3://${BUCKET}" --delete "${excludes[@]}"
+
+          # Multi-pass: for each override entry, run a targeted sync that
+          # only matches its path_pattern, with the override's
+          # Cache-Control. The final default sync excludes all override
+          # patterns so each slice is owned exclusively by one pass.
+          override_excludes=()
+          if [ -n "$OVERRIDES" ] && [ "$OVERRIDES" != "[]" ]; then
+            count=$(echo "$OVERRIDES" | jq 'length')
+            for i in $(seq 0 $((count - 1))); do
+              pattern=$(echo "$OVERRIDES" | jq -r ".[$i].path_pattern")
+              cc=$(echo "$OVERRIDES" | jq -r ".[$i].cache_control")
+              echo "Override pass: pattern=$pattern cache_control=$cc"
+              aws s3 sync "$SOURCE" "s3://${BUCKET}/" --delete \
+                "${user_excludes[@]}" \
+                --exclude "*" \
+                --include "$pattern" \
+                --cache-control "$cc"
+              override_excludes+=(--exclude "$pattern")
+            done
+          fi
+
+          # Final default-cache pass: everything not matched by an override.
+          cc_flag=()
+          if [ -n "$DEFAULT_CC" ]; then
+            cc_flag=(--cache-control "$DEFAULT_CC")
+          fi
+          echo "Default pass: cache_control=${DEFAULT_CC:-<none>}"
+          aws s3 sync "$SOURCE" "s3://${BUCKET}/" --delete \
+            "${user_excludes[@]}" \
+            "${override_excludes[@]}" \
+            "${cc_flag[@]}"
 
       - name: Apply Content-Type fixups
         if: inputs.content_type_fixups != ''

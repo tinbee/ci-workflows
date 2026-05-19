@@ -1,0 +1,133 @@
+name: Node + pnpm CI (reusable)
+
+# Reusable CI workflow for pnpm-based Node projects (NestJS, Vite,
+# Astro, monorepos). Skeleton runs: checkout -> pnpm -> Node -> install,
+# then opinionated default steps for pre-check / format / lint /
+# typecheck / build / test. Each step is opt-out by setting its input
+# to an empty string.
+#
+# Consumer repos call this with:
+#   uses: tinbee/ci-workflows/.github/workflows/node-pnpm-ci.yml@v1
+
+on:
+  workflow_call:
+    inputs:
+      node_version_file:
+        description: "Path to file containing Node version (e.g., .nvmrc). Single source of truth shared with local dev. Pass empty string to use `node_version` literal instead."
+        type: string
+        default: ".nvmrc"
+      node_version:
+        description: "Node version literal (e.g., '24'). Only used when node_version_file is empty."
+        type: string
+        default: "24"
+      install_command:
+        description: "Install step. Empty to skip (rare)."
+        type: string
+        default: "pnpm install --frozen-lockfile"
+      pre_check_command:
+        description: "Optional pre-check step run after install, before format/lint/typecheck. Multi-line bash allowed. Use for code generation (Prisma generate, GraphQL codegen, OpenAPI client gen). Empty to skip."
+        type: string
+        default: ""
+      format_check_command:
+        description: "Format check command. Empty to skip."
+        type: string
+        default: "pnpm format:check"
+      lint_command:
+        description: "Lint command. Empty to skip."
+        type: string
+        default: "pnpm lint"
+      typecheck_command:
+        description: "Typecheck command. Empty to skip."
+        type: string
+        default: "pnpm -r typecheck"
+      build_command:
+        description: "Build command. Empty to skip."
+        type: string
+        default: "pnpm -r build"
+      test_command:
+        description: "Test command. Empty to skip."
+        type: string
+        default: "pnpm -r test"
+      env_json:
+        description: 'JSON object of env vars exported to all subsequent steps via $GITHUB_ENV. Example: {"DATABASE_URL":"postgresql://ci:ci@localhost:5432/ci","VITE_API_URL":"https://ci.example"}. Use for CI-only placeholder values.'
+        type: string
+        default: "{}"
+      timeout_minutes:
+        description: "Job timeout in minutes."
+        type: number
+        default: 15
+
+jobs:
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set env from env_json input
+        if: inputs.env_json != '{}' && inputs.env_json != ''
+        shell: bash
+        env:
+          ENV_JSON: ${{ inputs.env_json }}
+        run: |
+          set -euo pipefail
+          # Export each key/value from the JSON object into $GITHUB_ENV
+          # so subsequent steps see them as plain environment variables.
+          echo "$ENV_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> "$GITHUB_ENV"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      # Two setup-node steps gated on node_version_file because the
+      # `node-version-file:` and `node-version:` inputs are mutually
+      # exclusive (specifying both errors out).
+      - name: Setup Node (from file)
+        if: inputs.node_version_file != ''
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: ${{ inputs.node_version_file }}
+          cache: pnpm
+
+      - name: Setup Node (from literal)
+        if: inputs.node_version_file == ''
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: pnpm
+
+      - name: Install dependencies
+        if: inputs.install_command != ''
+        shell: bash
+        run: ${{ inputs.install_command }}
+
+      - name: Pre-check (codegen, schema generation, etc.)
+        if: inputs.pre_check_command != ''
+        shell: bash
+        run: ${{ inputs.pre_check_command }}
+
+      - name: Format check
+        if: inputs.format_check_command != ''
+        shell: bash
+        run: ${{ inputs.format_check_command }}
+
+      - name: Lint
+        if: inputs.lint_command != ''
+        shell: bash
+        run: ${{ inputs.lint_command }}
+
+      - name: Typecheck
+        if: inputs.typecheck_command != ''
+        shell: bash
+        run: ${{ inputs.typecheck_command }}
+
+      - name: Build
+        if: inputs.build_command != ''
+        shell: bash
+        run: ${{ inputs.build_command }}
+
+      - name: Test
+        if: inputs.test_command != ''
+        shell: bash
+        run: ${{ inputs.test_command }}
