@@ -36,6 +36,10 @@ on:
         description: "AWS region (e.g. us-east-1)."
         type: string
         required: true
+      setup_pnpm:
+        description: "Whether to set up pnpm + cache: pnpm. Disable for consumers without a package.json or packageManager field (e.g. pre-SSG static sites that only run bare node scripts)."
+        type: boolean
+        default: true
     secrets:
       role_to_assume:
         description: "IAM role ARN to assume via OIDC."
@@ -58,13 +62,27 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        # v6 = Node 24 native runtime + pnpm v11 support. Earlier v4 ran
+        # on Node 20 and required FORCE_JAVASCRIPT_ACTIONS_TO_NODE24 at
+        # workflow level — no longer needed with v6.
+        if: inputs.setup_pnpm
+        uses: pnpm/action-setup@v6
 
-      - name: Setup Node
+      # Two setup-node steps gated on `setup_pnpm` because the `cache:`
+      # input doesn't accept a dynamic empty-string fallback — only one
+      # of npm/pnpm/yarn or the input must be omitted entirely.
+      - name: Setup Node (with pnpm cache)
+        if: inputs.setup_pnpm
         uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node_version }}
           cache: pnpm
+
+      - name: Setup Node (no cache)
+        if: ${{ !inputs.setup_pnpm }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node_version }}
 
       - name: Build
         if: inputs.build_command != ''

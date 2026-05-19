@@ -54,7 +54,8 @@ jobs:
 | `sync_excludes` | string | `""` | Newline-separated `--exclude` patterns. |
 | `content_type_fixups` | string | `""` | JSON array; each entry needs `ext`, `content_type`, optional `cache_control`. |
 | `invalidation_paths` | string | `"/*"` | Space-separated CloudFront paths. |
-| `aws_region` | string | required | e.g. `us-east-1`. |
+| `aws_region` | string | required | e.g. `us-east-1`. Pass via `vars.AWS_REGION` or hardcode — **NOT** `secrets.X` (the `with:` block forbids the secrets context). |
+| `setup_pnpm` | boolean | `true` | Whether to set up pnpm + pnpm cache. Set to `false` for consumers without `package.json` or `packageManager` field (e.g. pre-SSG static sites that only run bare `node` scripts). |
 
 **Secrets**
 
