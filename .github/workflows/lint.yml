@@ -1,0 +1,44 @@
+name: lint
+
+# Validates all workflow files in this repo with `actionlint`.
+# Catches the kind of bugs we shipped in v1.0.0 and v1.1.0:
+#   - secrets context in `with:` of a reusable workflow call
+#   - missing required action inputs / wrong types
+#   - shellcheck issues in inline `run:` blocks
+#
+# Required-status-check context: "lint / lint" (matches the ruleset
+# in .github/rulesets/main.json).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: lint-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install actionlint
+        # Official download script — pins to a specific actionlint
+        # release without depending on a third-party action wrapper.
+        run: |
+          bash <(curl --proto '=https' --tlsv1.2 -sSf \
+            https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -version
+
+      - name: Run actionlint
+        run: ./actionlint -color
