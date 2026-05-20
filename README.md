@@ -153,6 +153,14 @@ jobs:
 | `test_command` | string | `"pnpm -r test"` | Empty to skip. |
 | `env_json` | string | `"{}"` | JSON object of env vars exported to `$GITHUB_ENV`. |
 | `timeout_minutes` | number | `15` | Job timeout. |
+| `turbo_api` | string | `""` | Turbo Remote Cache API URL (typically `vars.TURBO_API`). Empty runs without remote cache. |
+| `turbo_team` | string | `""` | Turbo Remote Cache team slug (typically `vars.TURBO_TEAM`). |
+
+#### Secrets
+
+| Secret | Required | Notes |
+|---|---|---|
+| `turbo_token` | no | Turbo Remote Cache token (`secrets.TURBO_TOKEN`). Omit to run without remote cache. Must be a secret — it can't ride in `env_json` (a `with:` input, where the secrets context is forbidden). Pair with the `turbo_api` + `turbo_team` inputs. |
 
 The job is always named `CI` — required-status-check rulesets should reference this name.
 
