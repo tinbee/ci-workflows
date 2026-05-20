@@ -1,0 +1,126 @@
+name: Deploy to GitHub Pages (reusable)
+
+# Reusable workflow for "build a static/SPA site and publish it to GitHub
+# Pages." Two jobs: `build` (checkout → pnpm/Node → build → upload Pages
+# artifact) and `deploy` (actions/deploy-pages). pnpm-first defaults; npm
+# consumers set `setup_pnpm: false` and override `build_command`.
+#
+# The CALLER must grant the Pages permission ceiling and (recommended) a
+# concurrency group, because reusable workflows inherit caller permissions
+# and cannot set the caller-level concurrency:
+#
+#   permissions:
+#     contents: read
+#     pages: write
+#     id-token: write
+#   concurrency:
+#     group: "pages"
+#     cancel-in-progress: false
+#
+# See README.md for the full caller shape.
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: "Node version passed to actions/setup-node."
+        type: string
+        default: "24"
+      setup_pnpm:
+        description: "Whether to set up pnpm + cache: pnpm. Set false for npm/yarn consumers (then override build_command accordingly)."
+        type: boolean
+        default: true
+      build_command:
+        description: "Build script. Multi-line bash allowed. Default installs with pnpm + runs `pnpm build`. npm consumers override (e.g. `npm ci && npm run build`)."
+        type: string
+        default: |
+          pnpm install --frozen-lockfile
+          pnpm build
+      artifact_path:
+        description: "Directory uploaded as the Pages artifact. Vite/SSG convention is dist/."
+        type: string
+        default: "dist"
+      env_json:
+        description: 'JSON object of env vars exported to the build via $GITHUB_ENV. Example: {"VITE_API_URL":"https://api.example.com"}.'
+        type: string
+        default: "{}"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        if: inputs.setup_pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node (with pnpm cache)
+        if: inputs.setup_pnpm
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: pnpm
+
+      - name: Setup Node (no cache)
+        if: ${{ !inputs.setup_pnpm }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: Set env from env_json input
+        if: inputs.env_json != '{}' && inputs.env_json != ''
+        shell: bash
+        env:
+          ENV_JSON: ${{ inputs.env_json }}
+        run: |
+          set -euo pipefail
+          echo "$ENV_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> "$GITHUB_ENV"
+
+      - name: Build
+        shell: bash
+        run: ${{ inputs.build_command }}
+
+      - name: Verify build output exists
+        # Fail fast with a clear message if the build did not produce the
+        # artifact directory — otherwise upload-pages-artifact fails later
+        # with a cryptic "no such file" deep in the action.
+        shell: bash
+        env:
+          ARTIFACT_PATH: ${{ inputs.artifact_path }}
+        run: |
+          set -euo pipefail
+          if [ ! -d "${ARTIFACT_PATH}" ]; then
+            echo "::error::Build output directory '${ARTIFACT_PATH}' does not exist after the build step. Check that 'artifact_path' matches your build's output dir (Vite/SSG default: dist)."
+            exit 1
+          fi
+          if [ -z "$(ls -A "${ARTIFACT_PATH}")" ]; then
+            echo "::error::Build output directory '${ARTIFACT_PATH}' is empty — nothing to publish."
+            exit 1
+          fi
+          echo "Build output present in '${ARTIFACT_PATH}'."
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ inputs.artifact_path }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

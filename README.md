@@ -158,6 +158,57 @@ The job is always named `CI` — required-status-check rulesets should reference
 
 ---
 
+### `deploy-gh-pages.yml`
+
+Build a static/SPA site and publish it to **GitHub Pages**. Two jobs: `build` (checkout → pnpm/Node → build → upload Pages artifact) and `deploy` (`actions/deploy-pages`). pnpm-first defaults; npm consumers set `setup_pnpm: false` and override `build_command`.
+
+The caller **must** grant the Pages permission ceiling (reusable workflows inherit caller permissions) and should set a concurrency group.
+
+#### Caller example
+
+```yaml
+name: Deploy to GitHub Pages
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    uses: tinbee/ci-workflows/.github/workflows/deploy-gh-pages.yml@v1
+    # All defaults suit a pnpm Vite SPA (build → dist/). Override as needed:
+    # with:
+    #   setup_pnpm: false
+    #   build_command: |
+    #     npm ci
+    #     npm run build
+    #   artifact_path: frontend/dist
+```
+
+#### Inputs
+
+| Input | Type | Default | Notes |
+|---|---|---|---|
+| `node_version` | string | `"24"` | Passed to `actions/setup-node`. |
+| `setup_pnpm` | boolean | `true` | Set up pnpm + `cache: pnpm`. Set `false` for npm/yarn consumers (then override `build_command`). |
+| `build_command` | string | `pnpm install --frozen-lockfile` + `pnpm build` | Multi-line bash. npm consumers override (e.g. `npm ci && npm run build`). |
+| `artifact_path` | string | `"dist"` | Directory uploaded as the Pages artifact. |
+| `env_json` | string | `"{}"` | JSON object exported to the build via `$GITHUB_ENV` (e.g. `VITE_*`). |
+
+No secrets — GitHub Pages auth is the built-in `GITHUB_TOKEN` via the `pages: write` + `id-token: write` permissions the caller grants. The `build` job fails fast if the build doesn't produce a non-empty `artifact_path`.
+
+---
+
 ## Versioning
 
 - Floating major tags: `@v1`, `@v2`, ... — consumers pin to these, pick up patch + minor changes automatically.
