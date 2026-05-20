@@ -75,6 +75,48 @@ jobs:
       id-token: write
       contents: read
     steps:
+      - name: Validate required inputs and secrets
+        # Fail fast with a clear, named error when a required value is
+        # empty. `required: true` on a workflow_call input/secret only
+        # checks that the caller PASSED it — NOT that it is non-empty. An
+        # unset repo variable (e.g. a missing vars.AWS_REGION) or unset
+        # secret resolves to "" and would otherwise slip through to a
+        # cryptic failure deep inside the AWS steps. This step makes the
+        # reusable workflow the source of correctness rather than trusting
+        # each consumer to be configured right.
+        shell: bash
+        env:
+          AWS_REGION_IN: ${{ inputs.aws_region }}
+          ROLE_TO_ASSUME: ${{ secrets.role_to_assume }}
+          S3_BUCKET: ${{ secrets.s3_bucket }}
+          CLOUDFRONT_DISTRIBUTION: ${{ secrets.cloudfront_distribution }}
+        run: |
+          set -euo pipefail
+          missing=0
+
+          if [ -z "${AWS_REGION_IN}" ]; then
+            echo "::error::Input 'aws_region' is empty. Callers read it from the AWS_REGION repo variable (vars.AWS_REGION) — set that variable on the calling repo, usually via its Terraform module. A missing repo variable resolves to an empty string, which 'required: true' does not catch."
+            missing=1
+          fi
+          if [ -z "${ROLE_TO_ASSUME}" ]; then
+            echo "::error::Secret 'role_to_assume' is empty. Set the repo secret the caller maps into it (commonly AWS_CLOUDFRONT_ROLE_TO_ASSUME)."
+            missing=1
+          fi
+          if [ -z "${S3_BUCKET}" ]; then
+            echo "::error::Secret 's3_bucket' is empty. Set the repo secret the caller maps into it (commonly AWS_S3_BUCKET)."
+            missing=1
+          fi
+          if [ -z "${CLOUDFRONT_DISTRIBUTION}" ]; then
+            echo "::error::Secret 'cloudfront_distribution' is empty. Set the repo secret the caller maps into it (commonly AWS_CLOUDFRONT_DISTRIBUTION_ID)."
+            missing=1
+          fi
+
+          if [ "${missing}" -ne 0 ]; then
+            echo "::error::Aborting before any AWS calls — one or more required inputs/secrets are empty (see annotations above)."
+            exit 1
+          fi
+          echo "All required inputs and secrets are present."
+
       - name: Checkout
         uses: actions/checkout@v6
 
