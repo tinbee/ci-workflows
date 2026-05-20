@@ -48,8 +48,14 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # `actions/configure-pages` (below) reads the repo's Pages site via the
+    # API and needs pages: write — without it the build job fails with
+    # "Get Pages site failed ... Resource not accessible by integration".
+    # id-token: write covers upload-pages-artifact provenance.
     permissions:
       contents: read
+      pages: write
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
