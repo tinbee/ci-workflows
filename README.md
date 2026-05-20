@@ -95,6 +95,10 @@ jobs:
 | `s3_bucket` | Bucket name, no `s3://` prefix. |
 | `cloudfront_distribution` | Distribution ID. |
 
+#### Validation
+
+All required inputs/secrets (`aws_region`, `role_to_assume`, `s3_bucket`, `cloudfront_distribution`) are checked **non-empty** as the first step, before any AWS call. `required: true` only guarantees the caller *passed* a value — not that it's non-empty — so a missing `vars.AWS_REGION` (which resolves to `""`) or an unset secret fails fast here with a `::error::` annotation naming exactly what's missing, instead of a cryptic failure mid-deploy. The reusable workflow is the source of correctness; a consumer that isn't configured correctly is told precisely what to fix.
+
 ---
 
 ### `node-pnpm-ci.yml`
