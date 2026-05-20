@@ -56,12 +56,34 @@ on:
         description: "Job timeout in minutes."
         type: number
         default: 15
+      turbo_api:
+        description: "Turbo Remote Cache API URL (typically vars.TURBO_API, e.g. https://cache.example.com). Empty (default) runs without remote cache."
+        type: string
+        default: ""
+      turbo_team:
+        description: "Turbo Remote Cache team slug (typically vars.TURBO_TEAM). Empty (default) runs without remote cache."
+        type: string
+        default: ""
+    secrets:
+      turbo_token:
+        description: "Turbo Remote Cache token (secrets.TURBO_TOKEN). Optional — omit to run without remote cache. Must be a secret (can't ride in env_json, which is a `with:` input)."
+        required: false
 
 jobs:
   ci:
     name: CI
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout_minutes }}
+    # Turbo Remote Cache config, exported to every step. All optional —
+    # when unset (the common case) the empty values are equivalent to
+    # "no remote cache" and turbo builds locally. TURBO_TOKEN is a secret;
+    # TURBO_API/TURBO_TEAM are non-sensitive (vars). They live here rather
+    # than in env_json because env_json is a `with:` input and the secrets
+    # context can't cross that boundary.
+    env:
+      TURBO_API: ${{ inputs.turbo_api }}
+      TURBO_TEAM: ${{ inputs.turbo_team }}
+      TURBO_TOKEN: ${{ secrets.turbo_token }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
