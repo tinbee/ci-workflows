@@ -150,7 +150,11 @@ jobs:
 | `lint_command` | string | `"pnpm lint"` | Empty to skip. |
 | `typecheck_command` | string | `"pnpm -r typecheck"` | Empty to skip. |
 | `build_command` | string | `"pnpm -r build"` | Empty to skip. |
-| `test_command` | string | `"pnpm -r test"` | Empty to skip. |
+| `test_command` | string | `"pnpm -r test"` | Empty to skip. Runs on every trigger unless superseded by a coverage run (see below). |
+| `coverage_command` | string | `""` | Run **instead of** `test_command` on pushes to the default branch (post-merge). Produces coverage reports as evidence (not a gate). Empty disables coverage runs. Caller must trigger on `push` to the default branch. |
+| `coverage_artifact_path` | string | `""` | Multi-line glob paths uploaded as the coverage artifact (e.g. `packages/*/coverage`). Empty skips the upload. Only used during a coverage run. |
+| `coverage_artifact_name` | string | `"coverage"` | Name of the uploaded coverage artifact. |
+| `coverage_retention_days` | number | `14` | Retention (days) for the coverage artifact. |
 | `env_json` | string | `"{}"` | JSON object of env vars exported to `$GITHUB_ENV`. |
 | `timeout_minutes` | number | `15` | Job timeout. |
 | `turbo_api` | string | `""` | Turbo Remote Cache API URL (typically `vars.TURBO_API`). Empty runs without remote cache. |

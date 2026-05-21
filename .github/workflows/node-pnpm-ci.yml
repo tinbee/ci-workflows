@@ -48,6 +48,22 @@ on:
         description: "Test command. Empty to skip."
         type: string
         default: "pnpm -r test"
+      coverage_command:
+        description: "Coverage test command, run INSTEAD of test_command on pushes to the repo's default branch (typically right after a PR merges). Use to produce coverage reports as post-merge evidence. Empty (default) disables the coverage run entirely — test_command then runs on every trigger. Requires the caller to trigger on `push` to the default branch for this to fire."
+        type: string
+        default: ""
+      coverage_artifact_path:
+        description: "Multi-line glob paths uploaded as the coverage artifact after a coverage run (e.g. packages/*/coverage). Empty (default) skips the upload. Only consulted when coverage_command runs on a default-branch push."
+        type: string
+        default: ""
+      coverage_artifact_name:
+        description: "Name of the uploaded coverage artifact."
+        type: string
+        default: "coverage"
+      coverage_retention_days:
+        description: "Retention period (in days) for the uploaded coverage artifact."
+        type: number
+        default: 14
       env_json:
         description: 'JSON object of env vars exported to all subsequent steps via $GITHUB_ENV. Example: {"DATABASE_URL":"postgresql://ci:ci@localhost:5432/ci","VITE_API_URL":"https://ci.example"}. Use for CI-only placeholder values.'
         type: string
@@ -149,7 +165,41 @@ jobs:
         shell: bash
         run: ${{ inputs.build_command }}
 
+      # Plain test run on every trigger EXCEPT a coverage-eligible push
+      # to the default branch. The negative guard prevents running the
+      # suite twice (plain + coverage) on post-merge pushes when the
+      # caller has opted into coverage.
       - name: Test
-        if: inputs.test_command != ''
+        if: >-
+          inputs.test_command != '' &&
+          !(inputs.coverage_command != '' &&
+            github.event_name == 'push' &&
+            github.ref_name == github.event.repository.default_branch)
         shell: bash
         run: ${{ inputs.test_command }}
+
+      # On a push to the default branch (typically a PR merge), run the
+      # coverage command in place of the plain test command. Inert unless
+      # the caller sets coverage_command AND triggers on push to default.
+      - name: Test (with coverage)
+        if: >-
+          inputs.coverage_command != '' &&
+          github.event_name == 'push' &&
+          github.ref_name == github.event.repository.default_branch
+        shell: bash
+        run: ${{ inputs.coverage_command }}
+
+      # Upload coverage reports as a downloadable artifact (evidence only;
+      # not a gate). Same default-branch-push condition; additionally
+      # gated on coverage_artifact_path being set.
+      - name: Upload coverage
+        if: >-
+          inputs.coverage_artifact_path != '' &&
+          github.event_name == 'push' &&
+          github.ref_name == github.event.repository.default_branch
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.coverage_artifact_name }}
+          path: ${{ inputs.coverage_artifact_path }}
+          if-no-files-found: warn
+          retention-days: ${{ inputs.coverage_retention_days }}
