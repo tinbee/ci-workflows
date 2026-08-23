@@ -1,0 +1,162 @@
+name: DB migration call-out (reusable)
+
+# Reusable workflow: when a PR adds or modifies database migration
+# files, post a sticky PR comment containing the full SQL body of each
+# changed migration plus a destructive-operation scan, and label the PR
+# `db-migration`. Makes schema changes impossible to miss in review —
+# the reviewer's job is to READ the SQL, not to trust the ORM.
+#
+# Consumer repos call this from their ci.yml on pull_request:
+#   db-migration-callout:
+#     if: github.event_name == 'pull_request'
+#     uses: tinbee/ci-workflows/.github/workflows/db-migration-callout.yml@v1
+#     with:
+#       migration_globs: apps/api/prisma/migrations/**/migration.sql
+#
+# The destructive-op regex is the canonical list from the db-migrations
+# rule: DROP TABLE / DROP COLUMN / TRUNCATE / ALTER COLUMN ... TYPE /
+# ALTER COLUMN ... SET NOT NULL / bare DELETE FROM. DROP INDEX,
+# DROP CONSTRAINT, and DROP NOT NULL are deliberately NOT flagged.
+
+on:
+  workflow_call:
+    inputs:
+      migration_globs:
+        description: "Newline-separated git pathspecs matching migration files (e.g. apps/api/drizzle/*.sql)."
+        type: string
+        required: true
+      label:
+        description: "Label to apply to PRs that contain migration changes."
+        type: string
+        default: "db-migration"
+      max_file_chars:
+        description: "Per-file SQL truncation limit for the PR comment."
+        type: number
+        default: 12000
+
+jobs:
+  callout:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed migration files
+        id: detect
+        shell: bash
+        env:
+          GLOBS: ${{ inputs.migration_globs }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          pathspecs=()
+          while IFS= read -r g; do
+            g=$(echo "$g" | xargs)
+            [ -z "$g" ] && continue
+            pathspecs+=(":(glob)$g")
+          done <<< "$GLOBS"
+          git fetch --no-tags --depth=1 origin "$BASE_SHA" 2>/dev/null || true
+          FILES=$(git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- "${pathspecs[@]}" || true)
+          {
+            echo "files<<EOF"
+            echo "$FILES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          if [ -n "$FILES" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build comment body
+        if: steps.detect.outputs.found == 'true'
+        shell: bash
+        env:
+          FILES: ${{ steps.detect.outputs.files }}
+          MAX_CHARS: ${{ inputs.max_file_chars }}
+        run: |
+          set -euo pipefail
+          DESTRUCTIVE_RE='(^|[[:space:]])(DROP[[:space:]]+TABLE|DROP[[:space:]]+COLUMN|TRUNCATE|ALTER[[:space:]]+COLUMN[[:space:]]+[^[:space:]]+[[:space:]]+TYPE|ALTER[[:space:]]+COLUMN[[:space:]]+[^[:space:]]+[[:space:]]+SET[[:space:]]+NOT[[:space:]]+NULL|DELETE[[:space:]]+FROM[[:space:]]+[^[:space:]]+[[:space:]]*;)'
+          {
+            echo '<!-- db-migration-callout -->'
+            echo '## 🗄️ Database migration in this PR'
+            echo
+            echo 'This PR changes migration files. **Read the SQL below before approving** — do not trust that the ORM generated the intended statements (renames become DROP+ADD, etc).'
+          } > body.md
+          any_destructive=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            echo >> body.md
+            echo "### \`$f\`" >> body.md
+            hits=$(grep -inE "$DESTRUCTIVE_RE" "$f" | grep -ivE 'on[[:space:]]+delete' || true)
+            if [ -n "$hits" ]; then
+              any_destructive=true
+              echo >> body.md
+              echo '> [!WARNING]' >> body.md
+              echo '> **Destructive operations detected** — confirm the expand/contract phase and data-loss intent:' >> body.md
+              while IFS= read -r h; do
+                echo "> - line ${h%%:*}: \`$(echo "${h#*:}" | xargs | cut -c1-160)\`" >> body.md
+              done <<< "$hits"
+            fi
+            echo >> body.md
+            echo '```sql' >> body.md
+            head -c "$MAX_CHARS" "$f" >> body.md
+            if [ "$(wc -c < "$f")" -gt "$MAX_CHARS" ]; then
+              printf '\n-- … truncated (%s bytes total) — read the full file in the diff\n' "$(wc -c < "$f")" >> body.md
+            fi
+            echo '```' >> body.md
+          done <<< "$FILES"
+          echo >> body.md
+          if [ "$any_destructive" = true ]; then
+            echo '**Destructive checklist:** which expand/contract phase is this? What data is lost and why is that safe? Is the deploy snapshot/backup path in place?' >> body.md
+          else
+            echo '_Scan result: no destructive operations detected (additive only)._' >> body.md
+          fi
+          cat body.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post or update sticky comment + label
+        if: steps.detect.outputs.found == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          LABEL: ${{ inputs.label }}
+        run: |
+          set -euo pipefail
+          existing=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq '[.[] | select(.body | startswith("<!-- db-migration-callout -->"))][0].id // empty')
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$existing" -F body=@body.md > /dev/null
+            echo "Updated existing call-out comment $existing"
+          else
+            gh api "repos/$REPO/issues/$PR/comments" -F body=@body.md > /dev/null
+            echo "Posted call-out comment"
+          fi
+          gh label create "$LABEL" --color B60205 \
+            --description "PR contains database migration changes" --force 2>/dev/null || true
+          gh api -X POST "repos/$REPO/issues/$PR/labels" -f "labels[]=$LABEL" > /dev/null || true
+
+      - name: Clear stale call-out (migrations removed from PR)
+        if: steps.detect.outputs.found == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          LABEL: ${{ inputs.label }}
+        run: |
+          set -euo pipefail
+          existing=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq '[.[] | select(.body | startswith("<!-- db-migration-callout -->"))][0].id // empty')
+          if [ -n "$existing" ]; then
+            printf '<!-- db-migration-callout -->\n## 🗄️ Database migration in this PR\n\n_This PR no longer contains migration changes._\n' > body.md
+            gh api -X PATCH "repos/$REPO/issues/comments/$existing" -F body=@body.md > /dev/null
+            gh api -X DELETE "repos/$REPO/issues/$PR/labels/$LABEL" > /dev/null 2>&1 || true
+          fi
