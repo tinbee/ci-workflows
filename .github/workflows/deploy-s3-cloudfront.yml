@@ -30,7 +30,7 @@ on:
         type: string
         default: ""
       content_type_fixups:
-        description: 'JSON array of per-extension Content-Type overrides. Example: [{"ext":".ics","content_type":"text/calendar; charset=utf-8","cache_control":"public, max-age=3600"}]'
+        description: 'JSON array of Content-Type overrides, re-uploaded after the sync (which guesses by extension — extensionless files get binary/octet-stream). Each entry is either {"ext":...} matching top-level files by extension, or {"path":...} naming one file by its path relative to source_dir (for nested/extensionless files like .well-known/apple-app-site-association). Example: [{"ext":".ics","content_type":"text/calendar; charset=utf-8","cache_control":"public, max-age=3600"},{"path":".well-known/apple-app-site-association","content_type":"application/json"}]'
         type: string
         default: ""
       invalidation_paths:
@@ -229,16 +229,31 @@ jobs:
           set -euo pipefail
           count=$(echo "$FIXUPS" | jq 'length')
           for i in $(seq 0 $((count - 1))); do
-            ext=$(echo "$FIXUPS" | jq -r ".[$i].ext")
+            ext=$(echo "$FIXUPS" | jq -r ".[$i].ext // empty")
+            fpath=$(echo "$FIXUPS" | jq -r ".[$i].path // empty")
             ctype=$(echo "$FIXUPS" | jq -r ".[$i].content_type")
             ccontrol=$(echo "$FIXUPS" | jq -r ".[$i].cache_control // empty")
+            extra=()
+            if [ -n "$ccontrol" ]; then
+              extra+=(--cache-control "$ccontrol")
+            fi
+            if [ -n "$fpath" ]; then
+              # Explicit relative path: nested and/or extensionless files
+              # (e.g. .well-known/apple-app-site-association). The S3 key
+              # preserves the relative path, unlike the ext branch.
+              if [ ! -f "$SOURCE/$fpath" ]; then
+                echo "::error::content_type_fixups path not found in ${SOURCE}: ${fpath}"
+                exit 1
+              fi
+              aws s3 cp "$SOURCE/$fpath" "s3://${BUCKET}/$fpath" \
+                --content-type "$ctype" \
+                "${extra[@]}" \
+                --metadata-directive REPLACE
+              continue
+            fi
             shopt -s nullglob
             for f in "$SOURCE"/*"$ext"; do
               name=$(basename "$f")
-              extra=()
-              if [ -n "$ccontrol" ]; then
-                extra+=(--cache-control "$ccontrol")
-              fi
               aws s3 cp "$f" "s3://${BUCKET}/$name" \
                 --content-type "$ctype" \
                 "${extra[@]}" \
