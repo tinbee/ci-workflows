@@ -92,32 +92,36 @@ jobs:
           any_destructive=false
           while IFS= read -r f; do
             [ -z "$f" ] && continue
-            echo >> body.md
-            echo "### \`$f\`" >> body.md
             hits=$(grep -inE "$DESTRUCTIVE_RE" "$f" | grep -ivE 'on[[:space:]]+delete' || true)
-            if [ -n "$hits" ]; then
-              any_destructive=true
-              echo >> body.md
-              echo '> [!WARNING]' >> body.md
-              echo '> **Destructive operations detected** — confirm the expand/contract phase and data-loss intent:' >> body.md
-              while IFS= read -r h; do
-                echo "> - line ${h%%:*}: \`$(echo "${h#*:}" | xargs | cut -c1-160)\`" >> body.md
-              done <<< "$hits"
-            fi
-            echo >> body.md
-            echo '```sql' >> body.md
-            head -c "$MAX_CHARS" "$f" >> body.md
-            if [ "$(wc -c < "$f")" -gt "$MAX_CHARS" ]; then
-              printf '\n-- … truncated (%s bytes total) — read the full file in the diff\n' "$(wc -c < "$f")" >> body.md
-            fi
-            echo '```' >> body.md
+            [ -n "$hits" ] && any_destructive=true
+            {
+              echo
+              echo "### \`$f\`"
+              if [ -n "$hits" ]; then
+                echo
+                echo '> [!WARNING]'
+                echo '> **Destructive operations detected** — confirm the expand/contract phase and data-loss intent:'
+                while IFS= read -r h; do
+                  echo "> - line ${h%%:*}: \`$(echo "${h#*:}" | xargs | cut -c1-160)\`"
+                done <<< "$hits"
+              fi
+              echo
+              echo '```sql'
+              head -c "$MAX_CHARS" "$f"
+              if [ "$(wc -c < "$f")" -gt "$MAX_CHARS" ]; then
+                printf '\n-- … truncated (%s bytes total) — read the full file in the diff\n' "$(wc -c < "$f")"
+              fi
+              echo '```'
+            } >> body.md
           done <<< "$FILES"
-          echo >> body.md
-          if [ "$any_destructive" = true ]; then
-            echo '**Destructive checklist:** which expand/contract phase is this? What data is lost and why is that safe? Is the deploy snapshot/backup path in place?' >> body.md
-          else
-            echo '_Scan result: no destructive operations detected (additive only)._' >> body.md
-          fi
+          {
+            echo
+            if [ "$any_destructive" = true ]; then
+              echo '**Destructive checklist:** which expand/contract phase is this? What data is lost and why is that safe? Is the deploy snapshot/backup path in place?'
+            else
+              echo '_Scan result: no destructive operations detected (additive only)._'
+            fi
+          } >> body.md
           cat body.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Post or update sticky comment + label
