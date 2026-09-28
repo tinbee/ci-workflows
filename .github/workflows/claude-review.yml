@@ -1,0 +1,245 @@
+# Reusable workflow: a cold-context model review of a pull request.
+#
+# Only the diff, the repo and the rule docs are visible to it -- none of the author's
+# reasoning, none of the PR description's justifications. That is the point: a reviewer
+# who has been told why the code is fine reviews the explanation instead of the code.
+#
+# Triggered by adding a label once a PR has SETTLED (CI green, the Copilot rounds done),
+# never on every push: a review cancelled or superseded by the next push costs quota and
+# minutes and is read by nobody. The job consumes the label as its first step, so adding
+# it again requests another pass.
+#
+# Runs on a Max subscription token (`claude setup-token`), not an API key. Set
+# CLAUDE_CODE_OAUTH_TOKEN once at the org level and every repo inherits it.
+#
+# Consumer repos call this from their own claude-review.yml:
+#   on:
+#     pull_request:
+#       types: [labeled]
+#   jobs:
+#     claude-review:
+#       uses: tinbee/ci-workflows/.github/workflows/claude-review.yml@v1
+#       with:
+#         ci_check_name: "ci / CI"     # see the input's note -- this one bites
+#         project_context: "A workflow orchestrator. TypeScript, mid-port to Go."
+#       secrets: inherit
+#
+# The general rules live in this repository's review-rules/ and are checked out beside
+# the caller's code, so there is ONE copy of each rule rather than one per repo. A
+# consumer keeps only its own invariants, in docs/review-rules/README.md.
+
+name: Claude review (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      ci_check_name:
+        description: >-
+          The exact check-run name to wait for. This is the input most likely to be
+          wrong: a repo whose CI is a job that CALLS a reusable workflow reports the
+          check as "<caller job id> / <inner job name>" -- e.g. "ci / CI", NOT "CI".
+          Get it wrong and the wait never sees success, so every review is skipped
+          after a 30-minute wait. The step names the mismatch explicitly rather than
+          just timing out. Confirm with:
+            gh api repos/OWNER/REPO/commits/SHA/check-runs --jq '.check_runs[].name'
+          Defaults to the shared-workflow form, because delegating CI to
+          node-pnpm-ci.yml or go-ci.yml is the house pattern here and an inline CI job
+          is the exception. A repo with an inline job named `CI` passes "CI".
+        type: string
+        default: "ci / CI"
+      label:
+        description: "The label that requests a review. Consumed as the job's first step."
+        type: string
+        default: "claude-review"
+      project_context:
+        description: >-
+          One or two sentences telling the reviewer what this service IS and what
+          language it is in. Without it the model infers the domain from the diff,
+          which is exactly the guesswork this is meant to avoid.
+        type: string
+        default: ""
+      project_rules:
+        description: "Path in the caller's repo to its own invariants. Skipped when absent."
+        type: string
+        default: "docs/review-rules/README.md"
+      rules_ref:
+        description: >-
+          Ref of this repository to take the shared review-rules from. Defaults to the
+          floating major so the rules move with the workflow; pin to a full version to
+          freeze what a review is held to.
+        type: string
+        default: "v1"
+      model:
+        description: "Model for the review."
+        type: string
+        default: "claude-opus-5"
+      max_turns:
+        description: >-
+          Turn cap. The action DISCARDS a review that finishes past the cap, so this is
+          set well above observed usage -- a milestone-sized diff plus the rule docs has
+          taken 59 turns.
+        type: number
+        default: 80
+      ci_wait_attempts:
+        description: "Polls of 20s each while waiting for CI. 90 = 30 minutes."
+        type: number
+        default: 90
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: "OAuth token from `claude setup-token`. Without it the review cannot run."
+        required: true
+
+# Re-adding the label while a run is in flight replaces it. The label name is part of the
+# group so an unrelated label (whose run is skipped) cannot cancel a review in progress.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}-${{ github.event.label.name }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # The job runs for every labelled PR so the label is always consumed -- a skipped job
+    # would leave the label stuck on the PR, and a label that stays cannot be "added
+    # again". Whether a review actually happens is decided per step below.
+    runs-on: ubuntu-latest
+    env:
+      REQUESTED: ${{ github.event.label.name == inputs.label }}
+      # Drafts are not ready. Fork PRs cannot see the OAuth secret, so a review there
+      # would only fail. Everything after label consumption is gated on this.
+      ELIGIBLE: >-
+        ${{ github.event.label.name == inputs.label
+            && github.event.pull_request.draft == false
+            && github.event.pull_request.head.repo.full_name == github.repository }}
+    permissions:
+      contents: read
+      checks: read # the wait step reads this commit's check-runs
+      pull-requests: write
+      issues: write
+      # Required by anthropics/claude-code-action: it exchanges the job's OIDC token for
+      # the short-lived GitHub App token it comments with. No step of ours uses it.
+      id-token: write
+    steps:
+      # First, not last. A run cancelled by a re-label (concurrency above) never reaches
+      # a trailing step, and a label still on the PR cannot be re-added. The label is a
+      # one-shot request; consuming it up front keeps that true.
+      - name: Consume the review label
+        if: env.REQUESTED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Through env, not interpolated into the command. Neither value is
+          # attacker-controlled here (a number, and an input from the caller's own
+          # workflow file), but a `run:` block is the wrong place to learn that
+          # distinction the hard way.
+          PR: ${{ github.event.pull_request.number }}
+          LABEL: ${{ inputs.label }}
+        run: gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --remove-label "$LABEL"
+
+      # A model review of code that does not build, lint or pass tests is wasted quota.
+      # Instant when the label is added to an already-green PR; waits when added early.
+      - name: Wait for CI on this commit
+        id: ci
+        if: env.ELIGIBLE == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          CHECK_NAME: ${{ inputs.ci_check_name }}
+          ATTEMPTS: ${{ inputs.ci_wait_attempts }}
+        run: |
+          set -uo pipefail
+          # Check-runs from pull_request workflows attach to the PR head SHA. Every page
+          # is read and the newest matching run wins (reruns); an API hiccup counts as
+          # "still pending" rather than failing this job.
+          url="repos/${GITHUB_REPOSITORY}/commits/${SHA}/check-runs"
+          seen_any=no
+          for _ in $(seq 1 "$ATTEMPTS"); do
+            # One "<id> <conclusion>" line per matching run; highest id is newest. ids
+            # are never null, unlike started_at on a queued run.
+            line=$(gh api --paginate "$url" \
+              --jq ".check_runs[] | select(.name==\$name) | \"\(.id) \(.conclusion // \"pending\")\"" \
+              --arg name "$CHECK_NAME" 2>/dev/null | sort -n | tail -1)
+            [ -n "$line" ] && seen_any=yes
+            conclusion=$(printf '%s' "$line" | cut -d" " -f2)
+            [ -n "$conclusion" ] || conclusion=pending
+            case "$conclusion" in
+              success) echo "result=success" >> "$GITHUB_OUTPUT"; exit 0 ;;
+              pending|null|"") sleep 20 ;;
+              *) echo "CI concluded '$conclusion' -- skipping the model review"
+                 echo "result=$conclusion" >> "$GITHUB_OUTPUT"; exit 0 ;;
+            esac
+          done
+          # Distinguish "CI is slow" from "ci_check_name matches nothing", which is the
+          # same 30-minute timeout with a completely different fix.
+          if [ "$seen_any" = no ]; then
+            echo "::error::No check-run named '${CHECK_NAME}' exists on ${SHA}. Check the ci_check_name input: a repo whose CI calls a reusable workflow reports '<job id> / <inner job name>'. Names present on this commit:"
+            gh api --paginate "$url" --jq '.check_runs[].name' | sort -u || true
+            echo "result=no-such-check" >> "$GITHUB_OUTPUT"
+          else
+            echo "CI did not conclude within the wait -- skipping the model review"
+            echo "result=timeout" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Shallow: the review reads the PR through `gh pr diff`, not git history.
+      - name: Checkout the pull request
+        if: env.ELIGIBLE == 'true' && steps.ci.outputs.result == 'success'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # The shared rules, beside the caller's code, sparse so the rest of this repo's
+      # workflows are not dragged into the review's workspace.
+      - name: Checkout the shared review rules
+        if: env.ELIGIBLE == 'true' && steps.ci.outputs.result == 'success'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: tinbee/ci-workflows
+          ref: ${{ inputs.rules_ref }}
+          path: .shared-review-rules
+          sparse-checkout: review-rules
+          sparse-checkout-cone-mode: false
+
+      - name: Review
+        if: env.ELIGIBLE == 'true' && steps.ci.outputs.result == 'success'
+        uses: anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790 # v1
+        env:
+          GH_TOKEN: ${{ github.token }} # for the `gh pr comment` that publishes the review
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          use_sticky_comment: true
+          # In prompt mode nothing is published unless the prompt says so AND the tool is
+          # allowed. Least privilege: read the workspace (the rule docs), the PR
+          # diff/view verbs, and the comment verb. Nothing else.
+          claude_args: >-
+            --model ${{ inputs.model }} --max-turns ${{ inputs.max_turns }}
+            --allowedTools "Read,Glob,Grep,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),mcp__github_comment__update_claude_comment"
+          prompt: |
+            You are the cold-context reviewer for this pull request. You have not seen the
+            author's reasoning, and the PR description's justifications are not evidence.
+            Judge only what the code does.
+
+            ${{ inputs.project_context }}
+
+            Read `.shared-review-rules/review-rules/README.md` first: it indexes the
+            general Tin Bee rules and says when each applies. Read the ones that apply to
+            this diff -- reading all of them on a small diff wastes the budget that should
+            go on the code. Then read `${{ inputs.project_rules }}` if it exists, for this
+            project's own invariants, which add to the general rules rather than replacing
+            them.
+
+            Review the diff against those rules and against ordinary correctness.
+
+            Report only CONCRETE DEFECTS. For each: `file:line`, the failure scenario
+            (inputs or state -> wrong outcome), and the fix. Rank by severity. These come
+            first, in this order: cross-tenant reach, secrets in logs / URLs / responses,
+            TOCTOU across async boundaries, silently swallowed errors, unbounded reads,
+            unsafe migrations. Skip style and naming unless it hides a bug.
+
+            Two things to be careful about, because they cost a reviewer's credibility:
+            do not report a defect you have not traced to a concrete failure, and do not
+            assert a version- or config-specific fact without checking it in the repo --
+            a confidently wrong claim about a flag or a library version costs more than
+            the finding is worth. If a migration is included, quote every destructive
+            statement and say which expand/contract phase it is.
+
+            End with one line: "No further defects found" or "N defects above".
+
+            PUBLISH THE REVIEW. Write it to /tmp/review.md and run
+            `gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/review.md`
+            (the diff is `gh pr diff ${{ github.event.pull_request.number }}`). A review
+            that is not posted as a PR comment does not exist.
