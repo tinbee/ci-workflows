@@ -297,8 +297,30 @@ jobs:
     with:
       ci_check_name: "ci / CI"
       project_context: "A workflow orchestrator. TypeScript, mid-port to Go."
-    secrets: inherit
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
+
+Pass the secret **explicitly**, as above, not with `secrets: inherit`. `inherit` forwards
+organization secrets only when the called workflow is in the caller's organization, so it
+works for tinbee repos and hands over nothing for a caller in any other org — the job
+starts and fails in five seconds with `Secret CLAUDE_CODE_OAUTH_TOKEN is required, but not
+provided while calling`, with the secret present and shared with the repo. The explicit
+form is evaluated in the caller's context and works from every org, so it is the only form
+documented here.
+
+Two more things that only show up on a caller's first run:
+
+- **The secret lives in the CALLER's org (or repo), never here.** A reusable workflow reads
+  nothing from the org that hosts it; every expression in `secrets:` resolves against the
+  calling repository. A new org adopting this workflow sets its own
+  `CLAUDE_CODE_OAUTH_TOKEN` first.
+- **Changes to the caller's `claude-review.yml` must land on the default branch before a
+  review can run again.** `claude-code-action` refuses to run — exits green, posts nothing,
+  logs `Workflow validation failed. The workflow file must exist and have identical content
+  to the version on the repository's default branch` — when the PR's copy of the workflow
+  differs from `main`'s. So a fix to the caller file goes to `main` in its own PR, the
+  feature branch is updated from `main`, and only then is the label re-added.
 
 #### Inputs
 
@@ -310,14 +332,14 @@ jobs:
 | `project_rules` | `docs/review-rules/README.md` | The caller's own invariants. Skipped when absent. |
 | `rules_ref` | `v1` | Ref of this repo the shared `review-rules/` come from. |
 | `model` | `claude-opus-5` | |
-| `max_turns` | `80` | The action *discards* a review that runs past the cap. |
+| `max_turns` | `200` | A runaway guard, not a budget: the action fails a run that finishes past the cap after the review is already posted and paid for. |
 | `ci_wait_attempts` | `90` | 20s each, so 30 minutes. |
 
 #### Secrets
 
 | Secret | Notes |
 | --- | --- |
-| `CLAUDE_CODE_OAUTH_TOKEN` | Required. From `claude setup-token`. Set it once at the org level and every repo inherits it. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Required. From `claude setup-token`. Set once at the org level **of each calling org** — the workflow reads the caller's secrets, not this repo's — and passed explicitly (see the caller example; `secrets: inherit` does not cross organizations). |
 
 #### The rules it reviews against
 

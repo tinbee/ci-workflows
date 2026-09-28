@@ -10,7 +10,8 @@
 # it again requests another pass.
 #
 # Runs on a Max subscription token (`claude setup-token`), not an API key. Set
-# CLAUDE_CODE_OAUTH_TOKEN once at the org level and every repo inherits it.
+# CLAUDE_CODE_OAUTH_TOKEN once at the org level OF EACH CALLING ORG: a reusable workflow
+# reads the caller's secrets, never the secrets of the org that hosts it.
 #
 # Consumer repos call this from their own claude-review.yml:
 #   on:
@@ -28,7 +29,19 @@
 #       with:
 #         ci_check_name: "ci / CI"     # see the input's note -- this one bites
 #         project_context: "A workflow orchestrator. TypeScript, mid-port to Go."
-#       secrets: inherit
+#       secrets:
+#         CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+#
+# PASS THE SECRET EXPLICITLY, not with `secrets: inherit`. `inherit` forwards org secrets
+# only when the called workflow is in the caller's own organization; from any other org
+# it hands over nothing, and the job starts then fails in five seconds with "Secret
+# CLAUDE_CODE_OAUTH_TOKEN is required, but not provided while calling" -- with the secret
+# present and shared with the repo. The explicit form works from every org.
+#
+# AND LAND CALLER-FILE CHANGES ON THE DEFAULT BRANCH FIRST. claude-code-action refuses to
+# run when the PR's copy of the caller workflow differs from main's ("Workflow validation
+# failed ... identical content to the version on the repository's default branch"); it
+# exits green and posts nothing. Fix the caller on main, update the branch, re-label.
 #
 # THE CALLER MUST DECLARE THOSE PERMISSIONS when its repository's default workflow
 # token is read-only (Settings -> Actions -> Workflow permissions). A reusable workflow
