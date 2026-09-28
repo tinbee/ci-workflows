@@ -16,6 +16,12 @@
 #   on:
 #     pull_request:
 #       types: [labeled]
+#   permissions:                  # REQUIRED -- see the note below
+#     contents: read
+#     checks: read
+#     issues: write
+#     pull-requests: write
+#     id-token: write
 #   jobs:
 #     claude-review:
 #       uses: tinbee/ci-workflows/.github/workflows/claude-review.yml@v1
@@ -23,6 +29,19 @@
 #         ci_check_name: "ci / CI"     # see the input's note -- this one bites
 #         project_context: "A workflow orchestrator. TypeScript, mid-port to Go."
 #       secrets: inherit
+#
+# THE CALLER MUST DECLARE THOSE PERMISSIONS when its repository's default workflow
+# token is read-only (Settings -> Actions -> Workflow permissions). A reusable workflow
+# cannot request more than its caller holds, so the job below is rejected outright:
+#
+#   The nested job 'review' is requesting 'checks: read, issues: write,
+#   pull-requests: write, id-token: write', but is only allowed 'checks: none,
+#   issues: none, pull-requests: none, id-token: none'.
+#
+# That is a STARTUP FAILURE -- no jobs, no logs, no annotations, and the REST API
+# exposes none of it, so the reason is visible only on the run page in the browser. A
+# repo whose default is read-write (a laxer setting) works without the block, which is
+# how this stays hidden until the first hardened consumer adopts the workflow.
 #
 # The general rules live in this repository's review-rules/ and are checked out beside
 # the caller's code, so there is ONE copy of each rule rather than one per repo. A
