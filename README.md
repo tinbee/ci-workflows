@@ -221,6 +221,110 @@ No secrets — GitHub Pages auth is the built-in `GITHUB_TOKEN` via the `pages: 
 
 ---
 
+### `go-ci.yml`
+
+CI for a Go service. The counterpart to `node-pnpm-ci.yml` and deliberately the same
+shape: each step opts out by passing `""`, and the job is named `CI`, so a consumer
+reports the check as `<caller job id> / CI`.
+
+#### Caller example
+
+```yaml
+jobs:
+  ci:
+    uses: tinbee/ci-workflows/.github/workflows/go-ci.yml@v1
+    with:
+      buf: true
+      sqlc_version: "1.31.1"
+      generate_command: |
+        buf generate
+        sqlc generate
+      generated_paths: internal/proto internal/cp/store/db
+      lint_command: make lint
+      golangci_version: v2.14
+      post_command: make build-agent-linux
+```
+
+#### Inputs
+
+| Input | Default | Notes |
+| --- | --- | --- |
+| `go_version_file` | `go.mod` | Keeps CI and the module on one version. |
+| `working_directory` | `.` | For a repo whose Go module is not at the root (a service mid-port). |
+| `pre_command` | `""` | Runs first, from the repo root. For starting a database the tests need — this workflow owns the job, so a caller cannot add `services:`. |
+| `buf` | `false` | Install buf. |
+| `sqlc_version` | `""` | Empty skips it. **Pin it**: sqlc writes its version into generated output, so a floating version makes the freshness check fail for whoever is on a different one. |
+| `generate_command` | `""` | Regenerates committed code. |
+| `generated_paths` | `""` | Paths the freshness check diffs afterwards. |
+| `lint_command` | `""` | Project lint beyond golangci-lint. |
+| `golangci_version` | `""` | Empty skips the action. |
+| `build_command` | `go build ./...` | |
+| `test_command` | `go test -race ./...` | Race detector on by default. |
+| `post_command` | `""` | Runs last. Cross-compiles, artifact builds. |
+| `govulncheck` | `true` | Vulnerabilities in *reachable* code, not just the module graph. |
+| `gofmt_check` | `true` | Fails when `gofmt -l` names a file. |
+| `timeout_minutes` | `20` | |
+| `env_json` | `{}` | Extra env for every step. |
+
+No secrets.
+
+#### Migrating an inline CI job onto this
+
+**It renames the check.** An inline job named `CI` reports `CI`; a job calling this
+reports `<job id> / CI`. Update the required-status-check ruleset in the same change and
+re-PUT it, or every check goes green and every PR stays blocked with nothing red to
+explain it. A drift guard comparing the ruleset file against what the workflow reports
+belongs in the caller — see instastack's `ci.yml`.
+
+### `claude-review.yml`
+
+A cold-context model review of a pull request: only the diff, the repo and the rule docs
+are visible to it, none of the author's reasoning. Requested by adding a label once the PR
+has settled; the job consumes the label, so adding it again requests another pass.
+
+Runs on a Max subscription token from `claude setup-token`, not an API key.
+
+#### Caller example
+
+```yaml
+on:
+  pull_request:
+    types: [labeled]
+
+jobs:
+  claude-review:
+    uses: tinbee/ci-workflows/.github/workflows/claude-review.yml@v1
+    with:
+      ci_check_name: "ci / CI"
+      project_context: "A workflow orchestrator. TypeScript, mid-port to Go."
+    secrets: inherit
+```
+
+#### Inputs
+
+| Input | Default | Notes |
+| --- | --- | --- |
+| `ci_check_name` | `ci / CI` | **The input most likely to be wrong.** A repo whose CI *calls* a reusable workflow reports `<job id> / <inner job name>`; a repo with an inline job named `CI` reports `CI`. Wrong value means every review is skipped. The step names the mismatch and lists the available names rather than just timing out. |
+| `label` | `claude-review` | Consumed as the job's first step. |
+| `project_context` | `""` | One or two sentences on what the service is and what language. Without it the model infers the domain from the diff. |
+| `project_rules` | `docs/review-rules/README.md` | The caller's own invariants. Skipped when absent. |
+| `rules_ref` | `v1` | Ref of this repo the shared `review-rules/` come from. |
+| `model` | `claude-opus-5` | |
+| `max_turns` | `80` | The action *discards* a review that runs past the cap. |
+| `ci_wait_attempts` | `90` | 20s each, so 30 minutes. |
+
+#### Secrets
+
+| Secret | Notes |
+| --- | --- |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Required. From `claude setup-token`. Set it once at the org level and every repo inherits it. |
+
+#### The rules it reviews against
+
+`review-rules/` in this repository — one copy of each general Tin Bee rule, checked out
+beside the caller's code. Consumer repos keep only their own invariants. See
+[`review-rules/README.md`](review-rules/README.md) for the index and what each covers.
+
 ## Versioning
 
 - Floating major tags: `@v1`, `@v2`, ... — consumers pin to these, pick up patch + minor changes automatically.

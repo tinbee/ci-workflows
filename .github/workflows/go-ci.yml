@@ -1,0 +1,205 @@
+# Reusable workflow: CI for a Go service.
+#
+# The Go counterpart to node-pnpm-ci.yml, and deliberately the same shape: every step
+# opts out by passing "" for its command, the job is named `CI` so consumers report the
+# check as "<caller job id> / CI", and project-specific gates go in the command inputs
+# rather than being baked in here.
+#
+# Consumer repos call this from their ci.yml:
+#   jobs:
+#     ci:
+#       uses: tinbee/ci-workflows/.github/workflows/go-ci.yml@v1
+#       with:
+#         buf: true
+#         sqlc_version: "1.31.1"
+#         generate_command: |
+#           buf generate
+#           sqlc generate
+#         generated_paths: internal/proto internal/cp/store/db
+#         lint_command: make lint
+#         golangci_version: v2.14
+#         post_command: make build-agent-linux
+#
+# NOTE ON THE CHECK NAME. Moving a repo from an inline CI job onto this workflow CHANGES
+# the check-run name: an inline job named `CI` reports `CI`, while a job that calls this
+# reports `<job id> / CI`. Any required-status-check ruleset pinned to the old name must
+# be updated in the same change, or every check goes green and every PR stays blocked
+# with nothing red to explain it.
+
+name: Go CI (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      go_version_file:
+        description: "File the Go version is read from. Keeps CI and the module in step."
+        type: string
+        default: "go.mod"
+      working_directory:
+        description: >-
+          Directory holding the Go module, relative to the repo root. Not every repo has
+          it at the top: a service mid-port may keep the Go module beside the one it is
+          replacing.
+        type: string
+        default: "."
+      pre_command:
+        description: >-
+          Runs before anything else, from the REPO ROOT. For starting a database the
+          tests need: this workflow owns the job, so a caller cannot add a `services:`
+          block of its own.
+        type: string
+        default: ""
+      buf:
+        description: "Install buf (protobuf codegen). Only needed if generate_command uses it."
+        type: boolean
+        default: false
+      sqlc_version:
+        description: >-
+          sqlc version to install. Empty to skip. Pin it: sqlc writes its own version
+          into the generated output, so a floating version makes the freshness check
+          below fail for whoever is on a different one.
+        type: string
+        default: ""
+      generate_command:
+        description: "Regenerates committed code (buf/sqlc/mockgen). Paired with generated_paths."
+        type: string
+        default: ""
+      generated_paths:
+        description: >-
+          Space-separated paths the freshness check diffs after generate_command. This is
+          the gate that matters: generated code that is committed but stale still
+          COMPILES, and only fails later in a way that looks unrelated.
+        type: string
+        default: ""
+      lint_command:
+        description: "Project lint beyond golangci-lint (e.g. `make lint`). Empty to skip."
+        type: string
+        default: ""
+      golangci_version:
+        description: "golangci-lint version. Empty to skip the action entirely."
+        type: string
+        default: ""
+      build_command:
+        description: "Build gate."
+        type: string
+        default: "go build ./..."
+      test_command:
+        description: >-
+          Test gate. The race detector is on by default and should stay on for anything
+          with concurrent moving parts -- a data race that only appears under load is the
+          most expensive kind to find later.
+        type: string
+        default: "go test -race ./..."
+      post_command:
+        description: "Runs last, after tests pass. Cross-compiles, artifact builds, extra gates."
+        type: string
+        default: ""
+      govulncheck:
+        description: "Scan for known vulnerabilities in REACHABLE code, not merely in the module graph."
+        type: boolean
+        default: true
+      gofmt_check:
+        description: >-
+          Fail when `gofmt -l` names any file. Checked as emptiness of its output,
+          because gofmt exits 0 whether or not files need formatting.
+        type: boolean
+        default: true
+      timeout_minutes:
+        type: number
+        default: 20
+      env_json:
+        description: 'Extra env for every step, as JSON: {"FOO":"bar"}.'
+        type: string
+        default: "{}"
+
+jobs:
+  CI:
+    name: CI
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Pre-command
+        if: inputs.pre_command != ''
+        run: ${{ inputs.pre_command }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ inputs.working_directory }}/${{ inputs.go_version_file }}
+          cache-dependency-path: ${{ inputs.working_directory }}/go.sum
+
+      - uses: bufbuild/buf-action@v1
+        if: inputs.buf
+        with:
+          setup_only: true
+
+      - uses: sqlc-dev/setup-sqlc@v5
+        if: inputs.sqlc_version != ''
+        with:
+          sqlc-version: ${{ inputs.sqlc_version }}
+
+      # Regenerate, then diff. A stale generated file is the failure this catches, and it
+      # is invisible otherwise: the tree compiles and the tests pass against the old
+      # shape until something reads a column or field that is no longer there.
+      - name: Generated code is current
+        if: inputs.generate_command != ''
+        working-directory: ${{ inputs.working_directory }}
+        env: ${{ fromJSON(inputs.env_json) }}
+        run: |
+          ${{ inputs.generate_command }}
+          if ! git diff --exit-code -- ${{ inputs.generated_paths }}; then
+            echo "::error::generated code is stale -- regenerate and commit"
+            exit 1
+          fi
+
+      - name: Lint
+        if: inputs.lint_command != ''
+        working-directory: ${{ inputs.working_directory }}
+        env: ${{ fromJSON(inputs.env_json) }}
+        run: ${{ inputs.lint_command }}
+
+      - uses: golangci/golangci-lint-action@v6
+        if: inputs.golangci_version != ''
+        with:
+          version: ${{ inputs.golangci_version }}
+          working-directory: ${{ inputs.working_directory }}
+
+      - name: gofmt
+        if: inputs.gofmt_check
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          # The EMPTINESS of the output is the signal: gofmt -l prints the files needing
+          # formatting and exits 0 either way, so `gofmt -l .` on its own never fails.
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt would change these files:"
+            printf '%s\n' "$unformatted"
+            exit 1
+          fi
+
+      - name: Build
+        if: inputs.build_command != ''
+        working-directory: ${{ inputs.working_directory }}
+        env: ${{ fromJSON(inputs.env_json) }}
+        run: ${{ inputs.build_command }}
+
+      - name: Test
+        if: inputs.test_command != ''
+        working-directory: ${{ inputs.working_directory }}
+        env: ${{ fromJSON(inputs.env_json) }}
+        run: ${{ inputs.test_command }}
+
+      - name: Known vulnerabilities in reachable code
+        if: inputs.govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-file: ${{ inputs.working_directory }}/${{ inputs.go_version_file }}
+          go-package: ./...
+          work-dir: ${{ inputs.working_directory }}
+
+      - name: Post-command
+        if: inputs.post_command != ''
+        working-directory: ${{ inputs.working_directory }}
+        env: ${{ fromJSON(inputs.env_json) }}
+        run: ${{ inputs.post_command }}
