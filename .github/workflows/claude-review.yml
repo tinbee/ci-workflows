@@ -153,10 +153,22 @@ jobs:
           for _ in $(seq 1 "$ATTEMPTS"); do
             # One "<id> <conclusion>" line per matching run; highest id is newest. ids
             # are never null, unlike started_at on a queued run.
+            #
+            # The name reaches jq through `env`, NOT a --arg: `gh api` HAS NO --arg flag.
+            # It rejects one with "unknown flag" in under a tenth of a second, and with
+            # stderr discarded that read as "CI has not reported yet" -- so the wait
+            # failed instantly on every repo while looking like a slow-CI skip. stderr
+            # stays visible here for exactly that reason.
             line=$(gh api --paginate "$url" \
-              --jq ".check_runs[] | select(.name==\$name) | \"\(.id) \(.conclusion // \"pending\")\"" \
-              --arg name "$CHECK_NAME" 2>/dev/null | sort -n | tail -1)
-            [ -n "$line" ] && seen_any=yes
+              --jq '.check_runs[] | select(.name == env.CHECK_NAME) | "\(.id) \(.conclusion // "pending")"' \
+              | sort -n | tail -1) || line=""
+            # `if`, not `[ -n "$line" ] && seen_any=yes`: this job runs under `bash -e`,
+            # where a bare `A && B` whose A is false is a failed command and kills the
+            # script. An empty first poll is the NORMAL case, so that form turned the
+            # common path into a hard failure.
+            if [ -n "$line" ]; then
+              seen_any=yes
+            fi
             conclusion=$(printf '%s' "$line" | cut -d" " -f2)
             [ -n "$conclusion" ] || conclusion=pending
             case "$conclusion" in
