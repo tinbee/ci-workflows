@@ -76,7 +76,9 @@ on:
         type: string
         default: ""
       golangci_version:
-        description: "golangci-lint version. Empty to skip the action entirely."
+        description: >-
+          golangci-lint version, e.g. "v2.14". Empty to skip the action entirely. It must
+          be a v2: the action pinned below dropped golangci-lint v1.
         type: string
         default: ""
       build_command:
@@ -138,7 +140,7 @@ jobs:
         if: inputs.pre_command != ''
         run: ${{ inputs.pre_command }}
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: ${{ inputs.working_directory }}/${{ inputs.go_version_file }}
           cache-dependency-path: ${{ inputs.working_directory }}/go.sum
@@ -171,7 +173,11 @@ jobs:
         working-directory: ${{ inputs.working_directory }}
         run: ${{ inputs.lint_command }}
 
-      - uses: golangci/golangci-lint-action@v6
+      # v9, not v6: golangci-lint v2 is rejected outright by action v6 with "invalid
+      # version string 'v2.14' ... you must update to golangci-lint-action v7". Every
+      # config here is on golangci-lint v2, so the action has to be v7 or newer; v9 also
+      # runs on node24, which v6 no longer does.
+      - uses: golangci/golangci-lint-action@v9
         if: inputs.golangci_version != ''
         with:
           version: ${{ inputs.golangci_version }}
