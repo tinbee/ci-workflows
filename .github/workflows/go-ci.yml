@@ -120,6 +120,20 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # Exported into $GITHUB_ENV rather than applied as a step-level `env:` map.
+      # `env: ${{ fromJSON(inputs.env_json) }}` looks reasonable and does not load --
+      # GitHub rejects an expression as the whole env map, and the run fails at
+      # WORKFLOW level, which reports as the filename with no job and no annotation.
+      # Same approach as node-pnpm-ci.yml.
+      - name: Set env from env_json input
+        if: inputs.env_json != '{}' && inputs.env_json != ''
+        shell: bash
+        env:
+          ENV_JSON: ${{ inputs.env_json }}
+        run: |
+          set -euo pipefail
+          echo "$ENV_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> "$GITHUB_ENV"
+
       - name: Pre-command
         if: inputs.pre_command != ''
         run: ${{ inputs.pre_command }}
@@ -145,7 +159,6 @@ jobs:
       - name: Generated code is current
         if: inputs.generate_command != ''
         working-directory: ${{ inputs.working_directory }}
-        env: ${{ fromJSON(inputs.env_json) }}
         run: |
           ${{ inputs.generate_command }}
           if ! git diff --exit-code -- ${{ inputs.generated_paths }}; then
@@ -156,7 +169,6 @@ jobs:
       - name: Lint
         if: inputs.lint_command != ''
         working-directory: ${{ inputs.working_directory }}
-        env: ${{ fromJSON(inputs.env_json) }}
         run: ${{ inputs.lint_command }}
 
       - uses: golangci/golangci-lint-action@v6
@@ -181,13 +193,11 @@ jobs:
       - name: Build
         if: inputs.build_command != ''
         working-directory: ${{ inputs.working_directory }}
-        env: ${{ fromJSON(inputs.env_json) }}
         run: ${{ inputs.build_command }}
 
       - name: Test
         if: inputs.test_command != ''
         working-directory: ${{ inputs.working_directory }}
-        env: ${{ fromJSON(inputs.env_json) }}
         run: ${{ inputs.test_command }}
 
       - name: Known vulnerabilities in reachable code
@@ -201,5 +211,4 @@ jobs:
       - name: Post-command
         if: inputs.post_command != ''
         working-directory: ${{ inputs.working_directory }}
-        env: ${{ fromJSON(inputs.env_json) }}
         run: ${{ inputs.post_command }}
