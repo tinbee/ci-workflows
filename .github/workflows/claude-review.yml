@@ -94,11 +94,15 @@ on:
         default: "claude-opus-5"
       max_turns:
         description: >-
-          Turn cap. The action DISCARDS a review that finishes past the cap, so this is
-          set well above observed usage -- a milestone-sized diff plus the rule docs has
-          taken 59 turns.
+          Turn cap, as a runaway guard only -- NOT a budget. The action fails a run whose
+          result arrives past the cap, and by then the review has already been published
+          (the prompt posts it with `gh pr comment`) and the full cost already spent. So
+          exceeding this buys nothing and loses only the green check; there is no reason
+          to keep it tight. Measured across three repos on 2026-09-28: 60 turns / $4.86,
+          77 / $6.91, and 88 / $7.00 -- at the previous default of 80 the third was
+          thrown away and the second missed by one turn.
         type: number
-        default: 80
+        default: 200
       ci_wait_attempts:
         description: "Polls of 20s each while waiting for CI. 90 = 30 minutes."
         type: number
