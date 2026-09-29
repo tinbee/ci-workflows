@@ -45,8 +45,8 @@ jobs:
           "VITE_PUBLIC_KEY": "${{ vars.VITE_PUBLIC_KEY }}"
         }
     secrets:
-      role_to_assume:          ${{ secrets.AWS_CLOUDFRONT_ROLE_TO_ASSUME }}
-      s3_bucket:               ${{ secrets.AWS_S3_BUCKET }}
+      role_to_assume: ${{ secrets.AWS_CLOUDFRONT_ROLE_TO_ASSUME }}
+      s3_bucket: ${{ secrets.AWS_S3_BUCKET }}
       cloudfront_distribution: ${{ secrets.AWS_CLOUDFRONT_DISTRIBUTION_ID }}
 ```
 
@@ -59,10 +59,10 @@ jobs:
     with:
       aws_region: ${{ vars.AWS_REGION }}
       source_dir: "."
-      setup_pnpm: false                    # no package.json
-      cache_control_overrides: ""          # disable multi-pass sync
-      default_cache_control: ""            # no Cache-Control header
-      invalidation_paths: "/*"             # invalidate everything
+      setup_pnpm: false # no package.json
+      cache_control_overrides: "" # disable multi-pass sync
+      default_cache_control: "" # no Cache-Control header
+      invalidation_paths: "/*" # invalidate everything
       sync_excludes: |
         .git/*
         .github/*
@@ -73,31 +73,31 @@ jobs:
 
 #### Inputs
 
-| Input | Type | Default | Notes |
-|---|---|---|---|
-| `node_version` | string | `"24"` | Passed to `actions/setup-node`. |
-| `build_command` | string | `""` | Multi-line bash; skipped when empty. |
-| `source_dir` | string | `"dist/"` | What to sync to S3. |
-| `sync_excludes` | string | `""` | Newline-separated `--exclude` patterns (applies to every sync pass). |
-| `cache_control_overrides` | string | `'[{"path_pattern":"assets/*","cache_control":"public, max-age=31536000, immutable"}]'` | JSON array of per-pattern Cache-Control overrides. Each entry runs as a separate `aws s3 sync` pass before the default. Pass `""` to disable multi-pass entirely. |
-| `default_cache_control` | string | `"public, max-age=0, must-revalidate"` | Cache-Control for files NOT matched by any override. Pass `""` to omit the header (S3 default). |
-| `content_type_fixups` | string | `""` | JSON array of per-extension Content-Type fixups. Each entry needs `ext`, `content_type`, optional `cache_control`. Runs after all sync passes. |
-| `invalidation_paths` | string | `"/ /index.html"` | Space-separated CloudFront paths. SPA-friendly default. Pass `"/*"` for legacy static sites. |
-| `env_json` | string | `"{}"` | JSON object exported to `$GITHUB_ENV` before the build step. Use for `VITE_*` / `NEXT_PUBLIC_*` build-time config. |
-| `aws_region` | string | required | e.g. `us-east-1`. Pass via `vars.X` or hardcode — **NOT** `secrets.X` (the `with:` block forbids the secrets context). |
-| `setup_pnpm` | boolean | `true` | Whether to set up pnpm + pnpm cache. Set to `false` for consumers without `package.json` or `packageManager` field. |
+| Input                     | Type    | Default                                                                                 | Notes                                                                                                                                                             |
+| ------------------------- | ------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `node_version`            | string  | `"24"`                                                                                  | Passed to `actions/setup-node`.                                                                                                                                   |
+| `build_command`           | string  | `""`                                                                                    | Multi-line bash; skipped when empty.                                                                                                                              |
+| `source_dir`              | string  | `"dist/"`                                                                               | What to sync to S3.                                                                                                                                               |
+| `sync_excludes`           | string  | `""`                                                                                    | Newline-separated `--exclude` patterns (applies to every sync pass).                                                                                              |
+| `cache_control_overrides` | string  | `'[{"path_pattern":"assets/*","cache_control":"public, max-age=31536000, immutable"}]'` | JSON array of per-pattern Cache-Control overrides. Each entry runs as a separate `aws s3 sync` pass before the default. Pass `""` to disable multi-pass entirely. |
+| `default_cache_control`   | string  | `"public, max-age=0, must-revalidate"`                                                  | Cache-Control for files NOT matched by any override. Pass `""` to omit the header (S3 default).                                                                   |
+| `content_type_fixups`     | string  | `""`                                                                                    | JSON array of per-extension Content-Type fixups. Each entry needs `ext`, `content_type`, optional `cache_control`. Runs after all sync passes.                    |
+| `invalidation_paths`      | string  | `"/ /index.html"`                                                                       | Space-separated CloudFront paths. SPA-friendly default. Pass `"/*"` for legacy static sites.                                                                      |
+| `env_json`                | string  | `"{}"`                                                                                  | JSON object exported to `$GITHUB_ENV` before the build step. Use for `VITE_*` / `NEXT_PUBLIC_*` build-time config.                                                |
+| `aws_region`              | string  | required                                                                                | e.g. `us-east-1`. Pass via `vars.X` or hardcode — **NOT** `secrets.X` (the `with:` block forbids the secrets context).                                            |
+| `setup_pnpm`              | boolean | `true`                                                                                  | Whether to set up pnpm + pnpm cache. Set to `false` for consumers without `package.json` or `packageManager` field.                                               |
 
 #### Secrets
 
-| Secret | Notes |
-|---|---|
-| `role_to_assume` | IAM role ARN for OIDC. Role must trust `token.actions.githubusercontent.com` and the calling repo. |
-| `s3_bucket` | Bucket name, no `s3://` prefix. |
-| `cloudfront_distribution` | Distribution ID. |
+| Secret                    | Notes                                                                                              |
+| ------------------------- | -------------------------------------------------------------------------------------------------- |
+| `role_to_assume`          | IAM role ARN for OIDC. Role must trust `token.actions.githubusercontent.com` and the calling repo. |
+| `s3_bucket`               | Bucket name, no `s3://` prefix.                                                                    |
+| `cloudfront_distribution` | Distribution ID.                                                                                   |
 
 #### Validation
 
-All required inputs/secrets (`aws_region`, `role_to_assume`, `s3_bucket`, `cloudfront_distribution`) are checked **non-empty** as the first step, before any AWS call. `required: true` only guarantees the caller *passed* a value — not that it's non-empty — so a missing `vars.AWS_REGION` (which resolves to `""`) or an unset secret fails fast here with a `::error::` annotation naming exactly what's missing, instead of a cryptic failure mid-deploy. The reusable workflow is the source of correctness; a consumer that isn't configured correctly is told precisely what to fix.
+All required inputs/secrets (`aws_region`, `role_to_assume`, `s3_bucket`, `cloudfront_distribution`) are checked **non-empty** as the first step, before any AWS call. `required: true` only guarantees the caller _passed_ a value — not that it's non-empty — so a missing `vars.AWS_REGION` (which resolves to `""`) or an unset secret fails fast here with a `::error::` annotation naming exactly what's missing, instead of a cryptic failure mid-deploy. The reusable workflow is the source of correctness; a consumer that isn't configured correctly is told precisely what to fix.
 
 ---
 
@@ -140,31 +140,31 @@ jobs:
 
 #### Inputs
 
-| Input | Type | Default | Notes |
-|---|---|---|---|
-| `node_version_file` | string | `".nvmrc"` | Single source of truth shared with local dev. Pass `""` to use `node_version` literal instead. |
-| `node_version` | string | `"24"` | Only used when `node_version_file` is empty. |
-| `install_command` | string | `"pnpm install --frozen-lockfile"` | Empty to skip (rare). |
-| `pre_check_command` | string | `""` | Codegen / schema generation. Runs after install, before format/lint/typecheck. |
-| `format_check_command` | string | `"pnpm format:check"` | Empty to skip. |
-| `lint_command` | string | `"pnpm lint"` | Empty to skip. |
-| `typecheck_command` | string | `"pnpm -r typecheck"` | Empty to skip. |
-| `build_command` | string | `"pnpm -r build"` | Empty to skip. |
-| `test_command` | string | `"pnpm -r test"` | Empty to skip. Runs on every trigger unless superseded by a coverage run (see below). |
-| `coverage_command` | string | `""` | Run **instead of** `test_command` on pushes to the default branch (post-merge). Produces coverage reports as evidence (not a gate). Empty disables coverage runs. Caller must trigger on `push` to the default branch. |
-| `coverage_artifact_path` | string | `""` | Multi-line glob paths uploaded as the coverage artifact (e.g. `packages/*/coverage`). Empty skips the upload. Only used during a coverage run. |
-| `coverage_artifact_name` | string | `"coverage"` | Name of the uploaded coverage artifact. |
-| `coverage_retention_days` | number | `14` | Retention (days) for the coverage artifact. |
-| `env_json` | string | `"{}"` | JSON object of env vars exported to `$GITHUB_ENV`. |
-| `timeout_minutes` | number | `15` | Job timeout. |
-| `turbo_api` | string | `""` | Turbo Remote Cache API URL (typically `vars.TURBO_API`). Empty runs without remote cache. |
-| `turbo_team` | string | `""` | Turbo Remote Cache team slug (typically `vars.TURBO_TEAM`). |
+| Input                     | Type   | Default                            | Notes                                                                                                                                                                                                                  |
+| ------------------------- | ------ | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `node_version_file`       | string | `".nvmrc"`                         | Single source of truth shared with local dev. Pass `""` to use `node_version` literal instead.                                                                                                                         |
+| `node_version`            | string | `"24"`                             | Only used when `node_version_file` is empty.                                                                                                                                                                           |
+| `install_command`         | string | `"pnpm install --frozen-lockfile"` | Empty to skip (rare).                                                                                                                                                                                                  |
+| `pre_check_command`       | string | `""`                               | Codegen / schema generation. Runs after install, before format/lint/typecheck.                                                                                                                                         |
+| `format_check_command`    | string | `"pnpm format:check"`              | Empty to skip.                                                                                                                                                                                                         |
+| `lint_command`            | string | `"pnpm lint"`                      | Empty to skip.                                                                                                                                                                                                         |
+| `typecheck_command`       | string | `"pnpm -r typecheck"`              | Empty to skip.                                                                                                                                                                                                         |
+| `build_command`           | string | `"pnpm -r build"`                  | Empty to skip.                                                                                                                                                                                                         |
+| `test_command`            | string | `"pnpm -r test"`                   | Empty to skip. Runs on every trigger unless superseded by a coverage run (see below).                                                                                                                                  |
+| `coverage_command`        | string | `""`                               | Run **instead of** `test_command` on pushes to the default branch (post-merge). Produces coverage reports as evidence (not a gate). Empty disables coverage runs. Caller must trigger on `push` to the default branch. |
+| `coverage_artifact_path`  | string | `""`                               | Multi-line glob paths uploaded as the coverage artifact (e.g. `packages/*/coverage`). Empty skips the upload. Only used during a coverage run.                                                                         |
+| `coverage_artifact_name`  | string | `"coverage"`                       | Name of the uploaded coverage artifact.                                                                                                                                                                                |
+| `coverage_retention_days` | number | `14`                               | Retention (days) for the coverage artifact.                                                                                                                                                                            |
+| `env_json`                | string | `"{}"`                             | JSON object of env vars exported to `$GITHUB_ENV`.                                                                                                                                                                     |
+| `timeout_minutes`         | number | `15`                               | Job timeout.                                                                                                                                                                                                           |
+| `turbo_api`               | string | `""`                               | Turbo Remote Cache API URL (typically `vars.TURBO_API`). Empty runs without remote cache.                                                                                                                              |
+| `turbo_team`              | string | `""`                               | Turbo Remote Cache team slug (typically `vars.TURBO_TEAM`).                                                                                                                                                            |
 
 #### Secrets
 
-| Secret | Required | Notes |
-|---|---|---|
-| `turbo_token` | no | Turbo Remote Cache token (`secrets.TURBO_TOKEN`). Omit to run without remote cache. Must be a secret — it can't ride in `env_json` (a `with:` input, where the secrets context is forbidden). Pair with the `turbo_api` + `turbo_team` inputs. |
+| Secret        | Required | Notes                                                                                                                                                                                                                                          |
+| ------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `turbo_token` | no       | Turbo Remote Cache token (`secrets.TURBO_TOKEN`). Omit to run without remote cache. Must be a secret — it can't ride in `env_json` (a `with:` input, where the secrets context is forbidden). Pair with the `turbo_api` + `turbo_team` inputs. |
 
 The job is always named `CI` — required-status-check rulesets should reference this name.
 
@@ -209,13 +209,13 @@ jobs:
 
 #### Inputs
 
-| Input | Type | Default | Notes |
-|---|---|---|---|
-| `node_version` | string | `"24"` | Passed to `actions/setup-node`. |
-| `setup_pnpm` | boolean | `true` | Set up pnpm + `cache: pnpm`. Set `false` for npm/yarn consumers (then override `build_command`). |
-| `build_command` | string | `pnpm install --frozen-lockfile` + `pnpm build` | Multi-line bash. npm consumers override (e.g. `npm ci && npm run build`). |
-| `artifact_path` | string | `"dist"` | Directory uploaded as the Pages artifact. |
-| `env_json` | string | `"{}"` | JSON object exported to the build via `$GITHUB_ENV` (e.g. `VITE_*`). |
+| Input           | Type    | Default                                         | Notes                                                                                            |
+| --------------- | ------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `node_version`  | string  | `"24"`                                          | Passed to `actions/setup-node`.                                                                  |
+| `setup_pnpm`    | boolean | `true`                                          | Set up pnpm + `cache: pnpm`. Set `false` for npm/yarn consumers (then override `build_command`). |
+| `build_command` | string  | `pnpm install --frozen-lockfile` + `pnpm build` | Multi-line bash. npm consumers override (e.g. `npm ci && npm run build`).                        |
+| `artifact_path` | string  | `"dist"`                                        | Directory uploaded as the Pages artifact.                                                        |
+| `env_json`      | string  | `"{}"`                                          | JSON object exported to the build via `$GITHUB_ENV` (e.g. `VITE_*`).                             |
 
 No secrets — GitHub Pages auth is the built-in `GITHUB_TOKEN` via the `pages: write` + `id-token: write` permissions the caller grants. The `build` job fails fast if the build doesn't produce a non-empty `artifact_path`.
 
@@ -247,24 +247,24 @@ jobs:
 
 #### Inputs
 
-| Input | Default | Notes |
-| --- | --- | --- |
-| `go_version_file` | `go.mod` | Keeps CI and the module on one version. |
-| `working_directory` | `.` | For a repo whose Go module is not at the root (a service mid-port). |
-| `pre_command` | `""` | Runs first, from the repo root. For starting a database the tests need — this workflow owns the job, so a caller cannot add `services:`. |
-| `buf` | `false` | Install buf. |
-| `sqlc_version` | `""` | Empty skips it. **Pin it**: sqlc writes its version into generated output, so a floating version makes the freshness check fail for whoever is on a different one. |
-| `generate_command` | `""` | Regenerates committed code. |
-| `generated_paths` | `""` | Paths the freshness check diffs afterwards. |
-| `lint_command` | `""` | Project lint beyond golangci-lint. |
-| `golangci_version` | `""` | Empty skips the action. |
-| `build_command` | `go build ./...` | |
-| `test_command` | `go test -race ./...` | Race detector on by default. |
-| `post_command` | `""` | Runs last. Cross-compiles, artifact builds. |
-| `govulncheck` | `true` | Vulnerabilities in *reachable* code, not just the module graph. |
-| `gofmt_check` | `true` | Fails when `gofmt -l` names a file. |
-| `timeout_minutes` | `20` | |
-| `env_json` | `{}` | Extra env for every step. |
+| Input               | Default               | Notes                                                                                                                                                              |
+| ------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `go_version_file`   | `go.mod`              | Keeps CI and the module on one version.                                                                                                                            |
+| `working_directory` | `.`                   | For a repo whose Go module is not at the root (a service mid-port).                                                                                                |
+| `pre_command`       | `""`                  | Runs first, from the repo root. For starting a database the tests need — this workflow owns the job, so a caller cannot add `services:`.                           |
+| `buf`               | `false`               | Install buf.                                                                                                                                                       |
+| `sqlc_version`      | `""`                  | Empty skips it. **Pin it**: sqlc writes its version into generated output, so a floating version makes the freshness check fail for whoever is on a different one. |
+| `generate_command`  | `""`                  | Regenerates committed code.                                                                                                                                        |
+| `generated_paths`   | `""`                  | Paths the freshness check diffs afterwards.                                                                                                                        |
+| `lint_command`      | `""`                  | Project lint beyond golangci-lint.                                                                                                                                 |
+| `golangci_version`  | `""`                  | Empty skips the action.                                                                                                                                            |
+| `build_command`     | `go build ./...`      |                                                                                                                                                                    |
+| `test_command`      | `go test -race ./...` | Race detector on by default.                                                                                                                                       |
+| `post_command`      | `""`                  | Runs last. Cross-compiles, artifact builds.                                                                                                                        |
+| `govulncheck`       | `true`                | Vulnerabilities in _reachable_ code, not just the module graph.                                                                                                    |
+| `gofmt_check`       | `true`                | Fails when `gofmt -l` names a file.                                                                                                                                |
+| `timeout_minutes`   | `20`                  |                                                                                                                                                                    |
+| `env_json`          | `{}`                  | Extra env for every step.                                                                                                                                          |
 
 No secrets.
 
@@ -315,10 +315,10 @@ something other than `scope`, the context changes with it.
 
 #### Inputs
 
-| Input | Default | Notes |
-| --- | --- | --- |
-| `base_branch` | `main` | The base PRs are checked against. Other open PRs against this same base are what a PR is compared with. |
-| `escape_label` | `stacked-pr` | Label that makes overlap deliberate and skips the check. |
+| Input          | Default      | Notes                                                                                                   |
+| -------------- | ------------ | ------------------------------------------------------------------------------------------------------- |
+| `base_branch`  | `main`       | The base PRs are checked against. Other open PRs against this same base are what a PR is compared with. |
+| `escape_label` | `stacked-pr` | Label that makes overlap deliberate and skips the check.                                                |
 
 ### `claude-review.yml`
 
@@ -379,27 +379,27 @@ Two more things that only show up on a caller's first run:
 - **Changes to the caller's `claude-review.yml` must land on the default branch before a
   review can run again.** `claude-code-action` refuses to run — exits green, posts nothing,
   logs `Workflow validation failed. The workflow file must exist and have identical content
-  to the version on the repository's default branch` — when the PR's copy of the workflow
+to the version on the repository's default branch` — when the PR's copy of the workflow
   differs from `main`'s. So a fix to the caller file goes to `main` in its own PR, the
   feature branch is updated from `main`, and only then is the label re-added.
 
 #### Inputs
 
-| Input | Default | Notes |
-| --- | --- | --- |
-| `ci_check_name` | `ci / CI` | **The input most likely to be wrong.** A repo whose CI *calls* a reusable workflow reports `<job id> / <inner job name>`; a repo with an inline job named `CI` reports `CI`. Wrong value means every review is skipped. The step names the mismatch and lists the available names rather than just timing out. |
-| `label` | `claude-review` | Consumed as the job's first step. |
-| `project_context` | `""` | One or two sentences on what the service is and what language. Without it the model infers the domain from the diff. |
-| `project_rules` | `docs/review-rules/README.md` | The caller's own invariants. Skipped when absent. |
-| `rules_ref` | `v1` | Ref of this repo the shared `review-rules/` come from. |
-| `model` | `claude-opus-5` | |
-| `max_turns` | `200` | A runaway guard, not a budget: the action fails a run that finishes past the cap after the review is already posted and paid for. |
-| `ci_wait_attempts` | `90` | 20s each, so 30 minutes. |
+| Input              | Default                       | Notes                                                                                                                                                                                                                                                                                                          |
+| ------------------ | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ci_check_name`    | `ci / CI`                     | **The input most likely to be wrong.** A repo whose CI _calls_ a reusable workflow reports `<job id> / <inner job name>`; a repo with an inline job named `CI` reports `CI`. Wrong value means every review is skipped. The step names the mismatch and lists the available names rather than just timing out. |
+| `label`            | `claude-review`               | Consumed as the job's first step.                                                                                                                                                                                                                                                                              |
+| `project_context`  | `""`                          | One or two sentences on what the service is and what language. Without it the model infers the domain from the diff.                                                                                                                                                                                           |
+| `project_rules`    | `docs/review-rules/README.md` | The caller's own invariants. Skipped when absent.                                                                                                                                                                                                                                                              |
+| `rules_ref`        | `v1`                          | Ref of this repo the shared `review-rules/` come from.                                                                                                                                                                                                                                                         |
+| `model`            | `claude-opus-5`               |                                                                                                                                                                                                                                                                                                                |
+| `max_turns`        | `200`                         | A runaway guard, not a budget: the action fails a run that finishes past the cap after the review is already posted and paid for.                                                                                                                                                                              |
+| `ci_wait_attempts` | `90`                          | 20s each, so 30 minutes.                                                                                                                                                                                                                                                                                       |
 
 #### Secrets
 
-| Secret | Notes |
-| --- | --- |
+| Secret                    | Notes                                                                                                                                                                                                                                                |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Required. From `claude setup-token`. Set once at the org level **of each calling org** — the workflow reads the caller's secrets, not this repo's — and passed explicitly (see the caller example; `secrets: inherit` does not cross organizations). |
 
 #### The rules it reviews against
