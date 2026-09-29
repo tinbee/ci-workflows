@@ -4,6 +4,15 @@
 # reasoning, none of the PR description's justifications. That is the point: a reviewer
 # who has been told why the code is fine reviews the explanation instead of the code.
 #
+# Findings are published as INLINE REVIEW COMMENTS, one thread per finding, with
+# anything unanchorable in the review body. Threads are what make a finding
+# individually answerable: reply with why you disagree and resolve it, exactly as with
+# Copilot. It also means a repo whose branch protection sets
+# `required_review_thread_resolution` gets the review as a real merge gate for free,
+# with a per-finding override -- where a single PR comment carrying N findings is
+# invisible to that rule, so a PR can merge with every finding still open. That is not
+# hypothetical: it is how tinbee/envmesh#116 merged five still-under-review commits.
+#
 # Triggered by adding a label once a PR has SETTLED (CI green, the Copilot rounds done),
 # never on every push: a review cancelled or superseded by the next push costs quota and
 # minutes and is read by nobody. The job consumes the label as its first step, so adding
@@ -267,7 +276,7 @@ jobs:
           # is disposable and nothing is pushed, so Write costs nothing here.
           claude_args: >-
             --model ${{ inputs.model }} --max-turns ${{ inputs.max_turns }}
-            --allowedTools "Read,Glob,Grep,Write,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),mcp__github_comment__update_claude_comment"
+            --allowedTools "Read,Glob,Grep,Write,Bash(gh api:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),mcp__github_comment__update_claude_comment"
           prompt: |
             You are the cold-context reviewer for this pull request. You have not seen the
             author's reasoning, and the PR description's justifications are not evidence.
@@ -299,12 +308,48 @@ jobs:
 
             End with one line: "No further defects found" or "N defects above".
 
-            PUBLISH THE REVIEW. Write it to /tmp/review.md and run
-            `gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/review.md`
-            (the diff is `gh pr diff ${{ github.event.pull_request.number }}`). A review
-            that is not posted as a PR comment does not exist -- the job fails if none
-            appears. If a tool call is denied, do not stop: post with
-            `gh pr comment ${{ github.event.pull_request.number }} --body "..."` instead.
+            PUBLISH THE REVIEW AS INLINE COMMENTS, not as one PR comment. Each finding
+            anchored to its own line becomes a review THREAD, which is what the reviewer
+            on the other end can reply to and resolve one finding at a time -- the same
+            loop Copilot findings already go through. A single comment carrying N
+            findings has no threads, so a repo whose branch protection requires thread
+            resolution cannot see it at all, and disagreeing with one finding means
+            dismissing all of them.
+
+            Write a JSON file to /tmp/review.json:
+
+              {
+                "event": "COMMENT",
+                "body": "<the summary: which rules you read, what you checked and found
+                         clean, and any finding that has no line to attach to -- a stale
+                         PR description, a migration already on main, a missing test.
+                         End with the one-line count.>",
+                "comments": [
+                  { "path": "apps/api/src/foo.ts", "line": 42, "side": "RIGHT",
+                    "body": "<one finding: the failure scenario and the fix>" }
+                ]
+              }
+
+            Then post it:
+
+              gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews \
+                --method POST --input /tmp/review.json
+
+            ANCHORING RULES -- the API rejects the WHOLE review if one comment is
+            misplaced, which throws away the entire run:
+              - `path` and `line` must name a line the diff actually touches. Get them
+                from `gh pr diff`; do not guess from reading the file.
+              - `side: "RIGHT"` for added or changed lines, `"LEFT"` only for a line the
+                diff removes.
+              - A finding you cannot anchor goes in `body`. Never invent a line to hang
+                it on.
+
+            IF THE POST FAILS, do not stop and do not retry the same payload. Move every
+            finding into `body` (keeping its file:line inline as text), set `comments` to
+            `[]`, and post again. If that also fails, fall back to
+            `gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/review.md`.
+            A review that is not published does not exist -- the job fails if nothing
+            appears.
 
       # The action reports success when the MODEL finished, not when anything was
       # published. Without this gate a run can review for fifteen minutes, hit a denied
@@ -319,10 +364,29 @@ jobs:
           SINCE: ${{ steps.started.outputs.at }}
         run: |
           set -euo pipefail
+          # Three surfaces, because the prompt has three publish paths and only the
+          # first is the good one: a review with inline threads, a review whose findings
+          # all landed in the body, or the `gh pr comment` fallback. Counting only issue
+          # comments would fail a run that published perfectly well as a review.
+          #
           # `since` filters on updated_at, so a sticky comment edited in place counts too.
-          n=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments?since=${SINCE}" --jq '.[].id' | wc -l | tr -d ' ')
-          if [ "$n" -eq 0 ]; then
-            echo "::error::The review ran but no PR comment was posted since ${SINCE}. The model's output was discarded; check the Review step log for denied tool calls, then re-add the label."
+          issue_n=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments?since=${SINCE}" --jq '.[].id' | wc -l | tr -d ' ')
+          # Reviews have no `since` parameter; filter client-side on submitted_at.
+          review_n=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR}/reviews" \
+            --jq "[.[] | select(.submitted_at != null and .submitted_at >= \"${SINCE}\")] | length" \
+            | awk '{s+=$1} END {print s+0}')
+          thread_n=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR}/comments" \
+            --jq "[.[] | select(.created_at >= \"${SINCE}\")] | length" \
+            | awk '{s+=$1} END {print s+0}')
+
+          if [ "$((issue_n + review_n))" -eq 0 ]; then
+            echo "::error::The review ran but published nothing since ${SINCE} -- no review, no PR comment. The model's output was discarded; check the Review step log for denied tool calls, then re-add the label."
             exit 1
           fi
-          echo "review posted ($n comment(s) since ${SINCE})"
+
+          echo "published since ${SINCE}: ${review_n} review(s), ${thread_n} inline thread(s), ${issue_n} issue comment(s)"
+          # Loud but not fatal: a review with no inline threads is the degraded path, and
+          # a repo relying on required_review_thread_resolution gets no gate from it.
+          if [ "$thread_n" -eq 0 ]; then
+            echo "::warning::No inline threads were created, so there is nothing for branch protection's thread-resolution rule to hold. Either the diff genuinely had no line-anchorable defects, or the review fell back to a body-only post -- the Review step log says which."
+          fi
