@@ -408,6 +408,89 @@ Two more things that only show up on a caller's first run:
 beside the caller's code. Consumer repos keep only their own invariants. See
 [`review-rules/README.md`](review-rules/README.md) for the index and what each covers.
 
+### `copilot-review.yml`
+
+Requests a Copilot code review **on demand, by label** — the same shape as
+`claude-review.yml`. Add the `copilot-review` label; the job consumes it and asks
+Copilot, so adding it again asks again. Drafts are skipped.
+
+This exists because Copilot's automatic per-push review is what hits the account rate
+limit: with `review_on_push: true` in a repo's ruleset it re-reviews on **every** push, so
+a four-push pull request collects five reviews. `rulesets/protect-main.json` sets that to
+`false`, and this workflow is how you ask for the extra looks you actually want.
+
+```yaml
+on:
+  pull_request:
+    types: [labeled]
+
+jobs:
+  copilot-review:
+    uses: tinbee/ci-workflows/.github/workflows/copilot-review.yml@v1
+```
+
+| Input   | Default          | Notes                                                               |
+| ------- | ---------------- | ------------------------------------------------------------------- |
+| `label` | `copilot-review` | The label that requests a review. Consumed as the job's first step. |
+
+No secret needed — `GITHUB_TOKEN` with `pull-requests: write` can request a reviewer.
+
+Two things worth knowing if you ever call the API by hand. The reviewer login needs the
+**`[bot]` suffix** — `copilot-pull-request-reviewer[bot]` — or the API answers
+`422 Reviews may only be requested from collaborators`, which reads as "Copilot can't be
+requested through the API at all". And nothing appears in `requested_reviewers`
+afterwards, because Copilot consumes the request rather than queueing it like a human: a
+new review arriving is the only confirmation.
+
+## Rulesets
+
+`rulesets/protect-main.json` is the canonical `protect-main` branch ruleset — required
+checks, no force-push, no deletion, PR required, thread resolution required, and Copilot
+review with `review_on_push: false`. One definition instead of one per repo.
+
+Applying is **manual and deliberate**, because there is no way to automate it without a
+long-lived credential: reading or writing the rulesets API needs repo **admin**, and
+`administration` is not among the permission scopes a workflow may request, so
+`GITHUB_TOKEN` cannot be granted it. Your own `gh` login already has the admin, so run it
+yourself:
+
+```bash
+git clone https://github.com/tinbee/ci-workflows && cd ci-workflows
+
+# See whether a repo has drifted. Exits 0 if it matches, 1 with a diff if not.
+./rulesets/apply.sh --check tinbee/foliot
+
+# Apply it. Creates the ruleset if the repo has none.
+./rulesets/apply.sh tinbee/foliot
+```
+
+**Extra required checks go on the command line**, and are the only field a repo is
+expected to differ on. Quote any name containing spaces:
+
+```bash
+./rulesets/apply.sh tinbee/envmesh 'scope / pr-scope-guard'
+```
+
+Syncing the repos currently covered:
+
+```bash
+./rulesets/apply.sh tinbee/foliot
+./rulesets/apply.sh instastack/instastack
+./rulesets/apply.sh tinbee/envmesh 'scope / pr-scope-guard'
+```
+
+Notes on what it does and does not assert. It resolves the ruleset **by name**, never a
+hardcoded id, because the id differs per repo. It compares only the fields the canonical
+file claims to own — `name`, `target`, `enforcement`, `conditions`, `rules`,
+`bypass_actors` — with keys sorted, so an id, a timestamp or key ordering is never
+reported as drift. An unreadable listing exits 2 with the API's own response rather than
+claiming the ruleset is missing: those need opposite responses, and conflating them would
+send you to the wrong place.
+
+`required_review_thread_resolution` is `true` in the canonical file, and it is the rule
+that actually stops a merge over open findings — both review bots submit as `COMMENTED`,
+so `reviewDecision` stays clean however many threads are unresolved.
+
 ## Versioning
 
 - Floating major tags: `@v1`, `@v2`, ... — consumers pin to these, pick up patch + minor changes automatically.
