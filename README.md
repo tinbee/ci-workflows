@@ -276,6 +276,50 @@ re-PUT it, or every check goes green and every PR stays blocked with nothing red
 explain it. A drift guard comparing the ruleset file against what the workflow reports
 belongs in the caller — see instastack's `ci.yml`.
 
+### `pr-scope-guard.yml`
+
+Fails a PR that carries commits belonging to another **open** PR against the same base,
+listing each shared SHA and its subject.
+
+It exists because `tinbee/envmesh#116` was branched from an open PR's branch instead of
+from `main`, so it carried six commits under a one-commit title. Merging it put four
+review rounds' worth of still-under-review changes on `main` — a destructive migration and
+a data-delivery regression among them. Nothing was bypassed: a real PR, green CI, every
+required check satisfied. No gate looked at what the PR actually contained.
+
+Deliberately narrow. A genuine stacked PR sets its base to the branch below it, so the
+shared commits fall outside `base..head` and it never trips. For real overlap against the
+base branch the escape label makes it a decision rather than an accident.
+
+#### Caller example
+
+```yaml
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    branches: ["main"]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  scope:
+    uses: tinbee/ci-workflows/.github/workflows/pr-scope-guard.yml@v1
+```
+
+**The status-check context is `scope / pr-scope-guard`** — the caller's job id, then this
+workflow's job name. Require that exact string in the ruleset. A required context that
+never reports blocks every PR with no obvious cause, so if you name the caller job
+something other than `scope`, the context changes with it.
+
+#### Inputs
+
+| Input | Default | Notes |
+| --- | --- | --- |
+| `base_branch` | `main` | The base PRs are checked against. Other open PRs against this same base are what a PR is compared with. |
+| `escape_label` | `stacked-pr` | Label that makes overlap deliberate and skips the check. |
+
 ### `claude-review.yml`
 
 A cold-context model review of a pull request: only the diff, the repo and the rule docs

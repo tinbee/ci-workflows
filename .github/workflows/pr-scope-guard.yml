@@ -1,0 +1,109 @@
+# Reusable workflow: fail a PR that carries commits belonging to another open PR.
+#
+# Why it exists: tinbee/envmesh#116 ("Add the shared Claude review, and correct the
+# stale ruleset file") was branched from an open PR's branch rather than from main, so it
+# carried six commits under a one-commit title. Merging it put four review rounds' worth
+# of still-under-review API changes onto main — including a destructive migration and a
+# data-delivery regression. Nothing was bypassed: it was a real PR, CI was green, every
+# required check passed. No gate looked at what the PR actually contained.
+#
+# Deliberately narrow. It fires only when a PR targets the base branch AND shares a commit
+# with another OPEN PR against the same base. A genuine stacked PR sets its base to the
+# branch below it, so the shared commits fall outside base..head and it never trips. For
+# real overlap against the base branch, the escape label makes it a decision rather than
+# an accident.
+#
+# Caller:
+#   on:
+#     pull_request:
+#       types: [opened, synchronize, reopened, labeled, unlabeled]
+#       branches: ["main"]
+#   permissions:
+#     contents: read
+#     pull-requests: read
+#   jobs:
+#     scope:
+#       uses: tinbee/ci-workflows/.github/workflows/pr-scope-guard.yml@v1
+#
+# The status-check context is then "scope / pr-scope-guard" (caller job id, then this
+# workflow's job name). Require THAT string in the ruleset, not "pr-scope-guard" — a
+# required context that never reports blocks every PR with no obvious cause.
+name: PR scope guard (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      base_branch:
+        description: "The branch PRs are checked against. Other open PRs against this same base are what a PR is compared with."
+        type: string
+        default: "main"
+      escape_label:
+        description: "Label that makes overlap deliberate and skips the check."
+        type: string
+        default: "stacked-pr"
+
+jobs:
+  scope:
+    # This name is HALF the status-check context. A caller job `scope:` that
+    # calls this workflow reports as "scope / pr-scope-guard" — the caller's
+    # job id, then this name. Whatever the ruleset requires must match that
+    # exactly; a context that never reports blocks every PR with no obvious
+    # cause, so changing either half is a breaking change for consumers.
+    name: pr-scope-guard
+    runs-on: ubuntu-latest
+    # Declared here so the workflow is self-sufficient rather than relying on
+    # whatever the caller happens to grant. A reusable workflow can only narrow
+    # the caller's permissions, never widen them, so a caller that grants less
+    # than this still fails — hence the caller example in the header.
+    permissions:
+      contents: read
+      pull-requests: read
+    # A superseded run tells you nothing: the next push re-evaluates the same
+    # question against the same set of open PRs.
+    concurrency:
+      group: pr-scope-guard-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - name: No commits shared with another open PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          BASE: ${{ inputs.base_branch }}
+          ESCAPE: ${{ inputs.escape_label }}
+        run: |
+          set -euo pipefail
+
+          if printf '%s' "$LABELS" | jq -e --arg l "$ESCAPE" 'index($l)' >/dev/null; then
+            echo "::notice::'${ESCAPE}' label present — overlap with another open PR is intentional here."
+            exit 0
+          fi
+
+          # Commits this PR would add to main.
+          gh api --paginate "repos/$REPO/pulls/$PR/commits" --jq '.[].sha' | sort -u > /tmp/mine.txt
+          echo "This PR adds $(wc -l < /tmp/mine.txt) commit(s)."
+
+          FAILED=0
+          # Every OTHER open PR targeting main.
+          for other in $(gh api --paginate "repos/$REPO/pulls?state=open&base=${BASE}" \
+                           --jq ".[] | select(.number != $PR) | .number"); do
+            gh api --paginate "repos/$REPO/pulls/$other/commits" --jq '.[].sha' | sort -u > /tmp/other.txt
+            SHARED=$(comm -12 /tmp/mine.txt /tmp/other.txt || true)
+            if [ -n "$SHARED" ]; then
+              FAILED=1
+              COUNT=$(printf '%s\n' "$SHARED" | grep -c . || true)
+              echo "::error::This PR shares $COUNT commit(s) with open PR #$other. Merging it would land that PR's still-under-review work on main."
+              printf '%s\n' "$SHARED" | while read -r sha; do
+                [ -n "$sha" ] && echo "  ${sha:0:9}  $(gh api "repos/$REPO/commits/$sha" --jq '.commit.message' | head -1)"
+              done
+              echo "  Fix: rebase this branch onto origin/main so it carries only its own commits"
+              echo "       (git rebase --onto origin/main <last-shared-commit> $GITHUB_HEAD_REF),"
+              echo "       or add the '${ESCAPE}' label if the overlap is deliberate."
+            fi
+          done
+
+          if [ "$FAILED" -ne 0 ]; then
+            exit 1
+          fi
+          echo "No overlap with any other open PR."
