@@ -284,10 +284,22 @@ has settled; the job consumes the label, so adding it again requests another pas
 
 Runs on a Max subscription token from `claude setup-token`, not an API key.
 
+Findings post as **inline review comments — one thread per finding**, with anything that
+has no line to anchor to (a stale PR description, a migration already on `main`) in the
+review body. Threads are what make a finding individually answerable: reply with why you
+disagree and resolve it, exactly as with Copilot. They are also what
+`required_review_thread_resolution` counts, so a repo with that rule in its ruleset gets the
+review as a real merge gate with a per-finding override — where a single PR comment carrying
+N findings is invisible to it, and a PR can merge with every finding still open.
+
 A green check means a review **exists**, not merely that the model ran: the job fails when
-the model finishes without a new PR comment, because the action itself reports success
+the model finishes without publishing anything, because the action itself reports success
 either way, and a fifteen-minute review that never got posted is otherwise indistinguishable
-from a clean one.
+from a clean one. It counts reviews, inline threads and issue comments, since the prompt has
+three publish paths — the inline review, a body-only review when an anchor is rejected, and
+a plain PR comment as the last fallback. A run that published zero threads is warned about
+rather than failed: it means the gate silently went missing, and the Review step log says
+whether that was a clean diff or a fallback.
 
 #### Caller example
 
