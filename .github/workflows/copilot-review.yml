@@ -1,0 +1,83 @@
+# Reusable workflow: request a Copilot code review on demand, by label.
+#
+# Copilot's automatic per-push review is the problem this replaces. With
+# `copilot_code_review.review_on_push: true` in a ruleset it re-reviews on EVERY push,
+# which is how a four-push pull request collected five reviews and hit the account's
+# rate limit (tinbee/foliot#15, 2026-09-29). The cadence that works is one review when
+# the PR opens, then more only when asked -- which is this.
+#
+# Turn the automatic re-review off in the same change: rulesets/protect-main.json sets
+# review_on_push to false, and ./rulesets/apply.sh applies it.
+#
+# Consumer repos call this from their own copilot-review.yml:
+#   on:
+#     pull_request:
+#       types: [labeled]
+#   jobs:
+#     copilot-review:
+#       uses: tinbee/ci-workflows/.github/workflows/copilot-review.yml@v1
+#
+# No secret needed: GITHUB_TOKEN with `pull-requests: write` can request a reviewer,
+# unlike the rulesets API.
+
+name: Copilot review (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      label:
+        description: "The label that requests a review. Consumed as the job's first step."
+        type: string
+        default: "copilot-review"
+
+# Re-adding the label while a run is in flight replaces it. The label name is part of
+# the group so an unrelated label cannot cancel a request in progress.
+concurrency:
+  group: copilot-review-${{ github.event.pull_request.number }}-${{ github.event.label.name }}
+  cancel-in-progress: true
+
+jobs:
+  request:
+    # Runs for every labelled PR so the label is always consumed; whether a review is
+    # actually requested is decided per step below.
+    runs-on: ubuntu-latest
+    env:
+      REQUESTED: ${{ github.event.label.name == inputs.label }}
+      # Drafts are not ready, and Copilot declines them anyway.
+      ELIGIBLE: >-
+        ${{ github.event.label.name == inputs.label
+            && github.event.pull_request.draft == false }}
+    permissions:
+      pull-requests: write
+    steps:
+      # First, not last. A run cancelled by a re-label never reaches a trailing step,
+      # and a label still on the PR cannot be re-added -- the label is a one-shot
+      # request, and consuming it up front keeps that true.
+      - name: Consume the review label
+        if: env.REQUESTED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          LABEL: ${{ inputs.label }}
+        run: gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --remove-label "$LABEL"
+
+      - name: Request a Copilot review
+        if: env.ELIGIBLE == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # The [bot] SUFFIX IS REQUIRED. Without it the API answers
+          #   422 Reviews may only be requested from collaborators
+          # which reads as "Copilot cannot be requested through the API at all" and is
+          # why this looks impossible. Verified working on tinbee/foliot#15.
+          #
+          # Nothing appears in requested_reviewers afterwards: Copilot consumes the
+          # request rather than queueing it like a human reviewer, so a new review
+          # arriving is the only confirmation. Do not add a step asserting the reviewer
+          # is pending -- it would always fail.
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}/requested_reviewers" \
+            -X POST -f 'reviewers[]=copilot-pull-request-reviewer[bot]' --silent
+          echo "Requested a Copilot review on #${PR}. It arrives as a review with inline"
+          echo "threads within a minute or two; there is no pending-reviewer state to watch."

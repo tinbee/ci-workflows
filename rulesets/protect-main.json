@@ -1,0 +1,81 @@
+{
+  "_comment": [
+    "The canonical protect-main ruleset. One definition; apply.sh merges each repo's",
+    "own required status checks over `required_status_checks`, the only field that",
+    "legitimately differs between consumers. Everything else is shared, and a",
+    "difference is drift rather than configuration.",
+    "",
+    "copilot_code_review.review_on_push is FALSE deliberately. True means Copilot",
+    "re-reviews on every push, which is how a four-push PR collected five reviews and",
+    "hit the account rate limit (tinbee/foliot#15, 2026-09-29). One review when the PR",
+    "opens, then on demand, is the cadence that works. On demand is:",
+    "",
+    "  gh api repos/OWNER/REPO/pulls/N/requested_reviewers -X POST \\",
+    "    -f 'reviewers[]=copilot-pull-request-reviewer[bot]'",
+    "",
+    "The [bot] suffix is required -- without it the API answers 422 'Reviews may only",
+    "be requested from collaborators', which makes it look impossible. Verified on",
+    "foliot#15. requested_reviewers reads empty straight afterwards because Copilot",
+    "consumes the request rather than queueing it, so a new review appearing is the",
+    "only confirmation.",
+    "",
+    "pull_request.required_review_thread_resolution is TRUE, and it is what actually",
+    "prevents a merge over open findings: both review bots submit as COMMENTED, so",
+    "reviewDecision stays clean however many threads are unresolved.",
+    "",
+    "GitHub ignores unknown members, so this key is inert.",
+    "",
+    "  ./rulesets/apply.sh <owner/repo> [extra-check ...]",
+    "  ./rulesets/apply.sh --check <owner/repo> [extra-check ...]"
+  ],
+  "name": "protect-main",
+  "target": "branch",
+  "enforcement": "active",
+  "_comment_ref_name": [
+    "refs/heads/main, not ~DEFAULT_BRANCH, because that is what all three consumers",
+    "actually have. ~DEFAULT_BRANCH is the more robust spelling and would survive a",
+    "default-branch rename, but adopting it here would make every repo report drift on",
+    "the first check -- which is how a guard gets ignored. Switch all three together,",
+    "deliberately, if it is wanted."
+  ],
+  "conditions": {
+    "ref_name": {
+      "include": ["refs/heads/main"],
+      "exclude": []
+    }
+  },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [{ "context": "ci / CI" }]
+      }
+    },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": true,
+        "required_reviewers": [],
+        "require_code_owner_review": false,
+        "dismissal_restriction": { "enabled": false, "allowed_actors": [] },
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": true,
+        "require_extra_approval_for_unattributed_changes": true,
+        "allowed_merge_methods": ["merge", "squash", "rebase"]
+      }
+    },
+    {
+      "type": "copilot_code_review",
+      "parameters": {
+        "review_on_push": false,
+        "review_draft_pull_requests": false
+      }
+    }
+  ],
+  "bypass_actors": []
+}
