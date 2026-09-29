@@ -284,6 +284,11 @@ has settled; the job consumes the label, so adding it again requests another pas
 
 Runs on a Max subscription token from `claude setup-token`, not an API key.
 
+A green check means a review **exists**, not merely that the model ran: the job fails when
+the model finishes without a new PR comment, because the action itself reports success
+either way, and a fifteen-minute review that never got posted is otherwise indistinguishable
+from a clean one.
+
 #### Caller example
 
 ```yaml

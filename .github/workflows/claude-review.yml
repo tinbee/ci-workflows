@@ -242,6 +242,12 @@ jobs:
           sparse-checkout: review-rules
           sparse-checkout-cone-mode: false
 
+      # The publish gate below needs to know what "new" means.
+      - name: Mark the review start
+        id: started
+        if: env.ELIGIBLE == 'true' && steps.ci.outputs.result == 'success'
+        run: echo "at=$(date -u +%FT%TZ)" >> "$GITHUB_OUTPUT"
+
       - name: Review
         if: env.ELIGIBLE == 'true' && steps.ci.outputs.result == 'success'
         uses: anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790 # v1
@@ -252,10 +258,16 @@ jobs:
           use_sticky_comment: true
           # In prompt mode nothing is published unless the prompt says so AND the tool is
           # allowed. Least privilege: read the workspace (the rule docs), the PR
-          # diff/view verbs, and the comment verb. Nothing else.
+          # diff/view verbs, the comment verb, and Write -- the prompt asks for the
+          # review as a FILE (`--body-file`; a multi-KB body on the command line is
+          # fragile), so the tool that writes it must be allowed. Without it the model
+          # got a denial on every attempt and whether the review was posted at all
+          # depended on it improvising a fallback: 10 denials and a posted review one
+          # run, 13 denials and a sixteen-minute review discarded the next. The runner
+          # is disposable and nothing is pushed, so Write costs nothing here.
           claude_args: >-
             --model ${{ inputs.model }} --max-turns ${{ inputs.max_turns }}
-            --allowedTools "Read,Glob,Grep,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),mcp__github_comment__update_claude_comment"
+            --allowedTools "Read,Glob,Grep,Write,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),mcp__github_comment__update_claude_comment"
           prompt: |
             You are the cold-context reviewer for this pull request. You have not seen the
             author's reasoning, and the PR description's justifications are not evidence.
@@ -290,4 +302,27 @@ jobs:
             PUBLISH THE REVIEW. Write it to /tmp/review.md and run
             `gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/review.md`
             (the diff is `gh pr diff ${{ github.event.pull_request.number }}`). A review
-            that is not posted as a PR comment does not exist.
+            that is not posted as a PR comment does not exist -- the job fails if none
+            appears. If a tool call is denied, do not stop: post with
+            `gh pr comment ${{ github.event.pull_request.number }} --body "..."` instead.
+
+      # The action reports success when the MODEL finished, not when anything was
+      # published. Without this gate a run can review for fifteen minutes, hit a denied
+      # tool call on the way out, post nothing, and end green -- the whole review and
+      # its cost silently discarded, and the label already consumed. A comment newer
+      # than the start is the only evidence that a review exists.
+      - name: Confirm the review was posted
+        if: env.ELIGIBLE == 'true' && steps.ci.outputs.result == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          SINCE: ${{ steps.started.outputs.at }}
+        run: |
+          set -euo pipefail
+          # `since` filters on updated_at, so a sticky comment edited in place counts too.
+          n=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments?since=${SINCE}" --jq '.[].id' | wc -l | tr -d ' ')
+          if [ "$n" -eq 0 ]; then
+            echo "::error::The review ran but no PR comment was posted since ${SINCE}. The model's output was discarded; check the Review step log for denied tool calls, then re-add the label."
+            exit 1
+          fi
+          echo "review posted ($n comment(s) since ${SINCE})"
