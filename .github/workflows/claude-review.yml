@@ -306,7 +306,13 @@ jobs:
             the finding is worth. If a migration is included, quote every destructive
             statement and say which expand/contract phase it is.
 
-            End with one line: "No further defects found" or "N defects above".
+            End with one line: "No further defects found" or "N defects" -- no
+            "above" or "below". The findings are anchored to their own lines as review
+            threads, so they sit beside the code and in neither direction from this
+            summary, and a directional word is simply wrong. It also drifts within a
+            single review: one pass wrote "Finding 2 below asks for a migration" in the
+            body and "3 defects above" to close, in the same comment. Refer to a finding
+            by its number and its `file:line`, never by where it is on the page.
 
             PUBLISH THE REVIEW AS INLINE COMMENTS, not as one PR comment. Each finding
             anchored to its own line becomes a review THREAD, which is what the reviewer
