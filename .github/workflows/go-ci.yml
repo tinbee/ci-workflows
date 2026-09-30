@@ -231,19 +231,30 @@ jobs:
             esac
           done
 
-          # Prove the credential resolves a private repo BEFORE any build step needs it,
-          # so the failure names the credential rather than surfacing as a module error
-          # three steps later. Uses the first glob's owner and the repo Go will ask for.
-          first="${globs[0]%/\*}"
-          first="${first%/}"
-          case "$first" in
-            github.com/*)
-              if ssh -o BatchMode=yes -o StrictHostKeyChecking=no -T git@github.com 2>&1 | grep -q 'successfully authenticated'; then
-                echo "deploy key authenticates to github.com"
-              else
-                echo "::error::private_module_ssh_key does not authenticate to github.com. Check the key is installed as a deploy key on the repo holding the modules."
-                exit 1
-              fi
+          # Report whether the key authenticates, as a DIAGNOSTIC -- so a bad key is
+          # named here rather than surfacing as "module not found" three steps later.
+          #
+          # Two things this got wrong on its first run, both worth keeping written down:
+          #
+          # 1. It was `if ssh ... | grep -q ...`. GitHub runs every step under
+          #    `bash -e -o pipefail`, and `ssh -T git@github.com` ALWAYS exits 1
+          #    (there is no shell access), so pipefail made the pipeline exit 1 even
+          #    when grep matched -- the probe reported "does not authenticate" for a
+          #    perfectly good key and failed the build before anything was fetched.
+          #    The output is captured into a variable now; no pipeline is involved in
+          #    the condition.
+          # 2. It was FATAL. A probe that can be wrong must not gate the build. The
+          #    authoritative check is whether the module actually fetches, which
+          #    happens moments later and reports its own error. So this warns.
+          probe="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no -T git@github.com 2>&1 || true)"
+          case "$probe" in
+            *"successfully authenticated"*)
+              # A deploy key greets as the repo it is installed on, a user key as the
+              # user, so the identity in the greeting is itself useful in a log.
+              echo "github.com: ${probe}"
+              ;;
+            *)
+              echo "::warning::could not confirm the key authenticates to github.com; continuing, because the module fetch is the real test. ssh said: ${probe}"
               ;;
           esac
 
