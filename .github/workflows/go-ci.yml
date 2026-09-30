@@ -19,6 +19,9 @@
 #         lint_command: make lint
 #         golangci_version: v2.14
 #         post_command: make build-agent-linux
+#         goprivate: "github.com/tinbee/*"
+#       secrets:
+#         private_module_ssh_key: ${{ secrets.FOLIOT_SDK_DEPLOY_KEY }}
 #
 # NOTE ON THE CHECK NAME. Moving a repo from an inline CI job onto this workflow CHANGES
 # the check-run name: an inline job named `CI` reports `CI`, while a job that calls this
@@ -113,6 +116,28 @@ on:
         description: 'Extra env for every step, as JSON: {"FOO":"bar"}.'
         type: string
         default: "{}"
+      goprivate:
+        description: >-
+          Comma-separated module-path globs to fetch DIRECTLY rather than through
+          proxy.golang.org, e.g. "github.com/tinbee/*". Required for any private module:
+          the public proxy and checksum database cannot see a private repo, and the
+          failure is a 404 from the proxy that reads like a typo in the module path.
+          Pair it with the private_module_ssh_key secret -- each is useless alone.
+        type: string
+        default: ""
+    secrets:
+      private_module_ssh_key:
+        description: >-
+          Private half of a read-only DEPLOY KEY on the repo holding the private modules
+          (not this repo). Loaded into an ssh-agent for the job, with an insteadOf rewrite
+          so the HTTPS URL the Go toolchain asks for is fetched over SSH.
+
+          Needed because a repo's own GITHUB_TOKEN cannot read another repo, and cannot
+          read ANY repo in another org -- which is the usual case for a shared module.
+
+          Omit it and nothing happens: the step no-ops, so public-module repos are
+          unaffected.
+        required: false
 
 jobs:
   CI:
@@ -135,6 +160,92 @@ jobs:
         run: |
           set -euo pipefail
           echo "$ENV_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> "$GITHUB_ENV"
+
+      # BEFORE setup-go and before pre_command, because the first thing to touch the
+      # module graph wins -- buf, sqlc, golangci-lint and `go build` all fetch, and a
+      # missing credential fails in whichever of them happens to run first. That makes
+      # the error land somewhere unrelated to its cause.
+      #
+      # The secret arrives via `env:` rather than being referenced in `if:`. A step-level
+      # `if: secrets.x != ''` is not evaluated the way it reads in a reusable workflow,
+      # so the guard is inside the script where it is unambiguous: no key, no-op, and a
+      # repo with only public modules is untouched.
+      - name: Private Go modules
+        env:
+          PRIVATE_MODULE_SSH_KEY: ${{ secrets.private_module_ssh_key }}
+          GOPRIVATE_IN: ${{ inputs.goprivate }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GOPRIVATE_IN}" ] && [ -z "${PRIVATE_MODULE_SSH_KEY}" ]; then
+            echo "No private-module config; skipping."
+            exit 0
+          fi
+
+          # Half-configured is the dangerous state, because it fails LATER and elsewhere:
+          # GOPRIVATE alone makes Go fetch direct from a URL it cannot authenticate, and
+          # a key alone leaves Go asking the public proxy for a module it cannot see.
+          # Both read as "module not found".
+          if [ -z "${GOPRIVATE_IN}" ] || [ -z "${PRIVATE_MODULE_SSH_KEY}" ]; then
+            echo "::error::private-module config is half set: goprivate=$([ -n "${GOPRIVATE_IN}" ] && echo set || echo EMPTY), private_module_ssh_key=$([ -n "${PRIVATE_MODULE_SSH_KEY}" ] && echo set || echo EMPTY). Both are required together."
+            exit 1
+          fi
+
+          echo "GOPRIVATE=${GOPRIVATE_IN}" >> "$GITHUB_ENV"
+
+          # The agent's socket has to outlive this step, so its address goes into
+          # $GITHUB_ENV. `ssh-add -` reads the key from stdin, so it is never written to
+          # disk and never appears in a command line.
+          eval "$(ssh-agent -s)" > /dev/null
+          echo "SSH_AUTH_SOCK=${SSH_AUTH_SOCK}" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=${SSH_AGENT_PID}" >> "$GITHUB_ENV"
+
+          # A trailing newline is required or ssh-add rejects the key as invalid --
+          # `gh secret set` from a file preserves it, but a value pasted into the web UI
+          # commonly loses it, and the resulting "error in libcrypto" names nothing.
+          if ! printf '%s\n' "${PRIVATE_MODULE_SSH_KEY}" | ssh-add - 2>/dev/null; then
+            echo "::error::could not load private_module_ssh_key into ssh-agent. It must be the PRIVATE half of an OpenSSH key with no passphrase (CI cannot enter one)."
+            exit 1
+          fi
+
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+
+          # Rewrite only the hosts/orgs named in goprivate, never all of github.com:
+          # a blanket rewrite changes how every unrelated module is fetched, including
+          # public ones that would otherwise come from the proxy.
+          IFS=',' read -ra globs <<< "${GOPRIVATE_IN}"
+          for glob in "${globs[@]}"; do
+            prefix="${glob%/\*}"
+            prefix="${prefix%/}"
+            case "$prefix" in
+              github.com/*)
+                owner="${prefix#github.com/}"
+                git config --global "url.git@github.com:${owner}/.insteadOf" "https://github.com/${owner}/"
+                echo "rewrite: https://github.com/${owner}/ -> git@github.com:${owner}/"
+                ;;
+              *)
+                echo "::warning::no SSH rewrite for '${prefix}' -- only github.com paths are handled. Fetches for it will use HTTPS and may fail."
+                ;;
+            esac
+          done
+
+          # Prove the credential resolves a private repo BEFORE any build step needs it,
+          # so the failure names the credential rather than surfacing as a module error
+          # three steps later. Uses the first glob's owner and the repo Go will ask for.
+          first="${globs[0]%/\*}"
+          first="${first%/}"
+          case "$first" in
+            github.com/*)
+              if ssh -o BatchMode=yes -o StrictHostKeyChecking=no -T git@github.com 2>&1 | grep -q 'successfully authenticated'; then
+                echo "deploy key authenticates to github.com"
+              else
+                echo "::error::private_module_ssh_key does not authenticate to github.com. Check the key is installed as a deploy key on the repo holding the modules."
+                exit 1
+              fi
+              ;;
+          esac
 
       - name: Pre-command
         if: inputs.pre_command != ''
