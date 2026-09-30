@@ -243,30 +243,78 @@ jobs:
       lint_command: make lint
       golangci_version: v2.14
       post_command: make build-agent-linux
+      # Only for a repo depending on a private module; see "Private modules" below.
+      goprivate: "github.com/tinbee/*"
+    secrets:
+      private_module_ssh_key: ${{ secrets.FOLIOT_SDK_DEPLOY_KEY }}
 ```
 
 #### Inputs
 
-| Input               | Default               | Notes                                                                                                                                                              |
-| ------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `go_version_file`   | `go.mod`              | Keeps CI and the module on one version.                                                                                                                            |
-| `working_directory` | `.`                   | For a repo whose Go module is not at the root (a service mid-port).                                                                                                |
-| `pre_command`       | `""`                  | Runs first, from the repo root. For starting a database the tests need — this workflow owns the job, so a caller cannot add `services:`.                           |
-| `buf`               | `false`               | Install buf.                                                                                                                                                       |
-| `sqlc_version`      | `""`                  | Empty skips it. **Pin it**: sqlc writes its version into generated output, so a floating version makes the freshness check fail for whoever is on a different one. |
-| `generate_command`  | `""`                  | Regenerates committed code.                                                                                                                                        |
-| `generated_paths`   | `""`                  | Paths the freshness check diffs afterwards.                                                                                                                        |
-| `lint_command`      | `""`                  | Project lint beyond golangci-lint.                                                                                                                                 |
-| `golangci_version`  | `""`                  | Empty skips the action.                                                                                                                                            |
-| `build_command`     | `go build ./...`      |                                                                                                                                                                    |
-| `test_command`      | `go test -race ./...` | Race detector on by default.                                                                                                                                       |
-| `post_command`      | `""`                  | Runs last. Cross-compiles, artifact builds.                                                                                                                        |
-| `govulncheck`       | `true`                | Vulnerabilities in _reachable_ code, not just the module graph.                                                                                                    |
-| `gofmt_check`       | `true`                | Fails when `gofmt -l` names a file.                                                                                                                                |
-| `timeout_minutes`   | `20`                  |                                                                                                                                                                    |
-| `env_json`          | `{}`                  | Extra env for every step.                                                                                                                                          |
+| Input               | Default               | Notes                                                                                                                                                                                                                         |
+| ------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `go_version_file`   | `go.mod`              | Keeps CI and the module on one version.                                                                                                                                                                                       |
+| `working_directory` | `.`                   | For a repo whose Go module is not at the root (a service mid-port).                                                                                                                                                           |
+| `pre_command`       | `""`                  | Runs first, from the repo root. For starting a database the tests need — this workflow owns the job, so a caller cannot add `services:`.                                                                                      |
+| `buf`               | `false`               | Install buf.                                                                                                                                                                                                                  |
+| `sqlc_version`      | `""`                  | Empty skips it. **Pin it**: sqlc writes its version into generated output, so a floating version makes the freshness check fail for whoever is on a different one.                                                            |
+| `generate_command`  | `""`                  | Regenerates committed code.                                                                                                                                                                                                   |
+| `generated_paths`   | `""`                  | Paths the freshness check diffs afterwards.                                                                                                                                                                                   |
+| `lint_command`      | `""`                  | Project lint beyond golangci-lint.                                                                                                                                                                                            |
+| `golangci_version`  | `""`                  | Empty skips the action.                                                                                                                                                                                                       |
+| `build_command`     | `go build ./...`      |                                                                                                                                                                                                                               |
+| `test_command`      | `go test -race ./...` | Race detector on by default.                                                                                                                                                                                                  |
+| `post_command`      | `""`                  | Runs last. Cross-compiles, artifact builds.                                                                                                                                                                                   |
+| `govulncheck`       | `true`                | Vulnerabilities in _reachable_ code, not just the module graph.                                                                                                                                                               |
+| `gofmt_check`       | `true`                | Fails when `gofmt -l` names a file.                                                                                                                                                                                           |
+| `timeout_minutes`   | `20`                  |                                                                                                                                                                                                                               |
+| `env_json`          | `{}`                  | Extra env for every step.                                                                                                                                                                                                     |
+| `goprivate`         | `""`                  | Comma-separated module-path globs to fetch direct rather than through `proxy.golang.org`, e.g. `github.com/tinbee/*`. Required for any private module. Pair with the `private_module_ssh_key` secret — each is useless alone. |
 
-No secrets.
+#### Secrets
+
+| Secret                   | Required | Notes                                                                                                                                                                                                                                                      |
+| ------------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `private_module_ssh_key` | no       | Private half of a read-only **deploy key on the repo holding the private modules** (not on the caller). Loaded into an `ssh-agent` for the job, with an `insteadOf` rewrite so the HTTPS URL Go asks for is fetched over SSH. Omit it and the step no-ops. |
+
+#### Private modules
+
+A repo's own `GITHUB_TOKEN` cannot read another repo, and cannot read any repo in another
+org — so a module shared between orgs needs its own credential. Two settings, and each is
+useless alone:
+
+```yaml
+jobs:
+  ci:
+    uses: tinbee/ci-workflows/.github/workflows/go-ci.yml@v1
+    with:
+      goprivate: "github.com/tinbee/*"
+    secrets:
+      private_module_ssh_key: ${{ secrets.FOLIOT_SDK_DEPLOY_KEY }}
+```
+
+Setting **exactly one** of the two is an error rather than a warning, because
+half-configured fails later and elsewhere: `goprivate` alone makes Go fetch direct from a
+URL it cannot authenticate, a key alone leaves Go asking the public proxy for a module it
+cannot see, and both read as "module not found" from whichever of `buf`, `sqlc`,
+`golangci-lint` or `go build` happens to fetch first.
+
+To set the credential up, on the repo that **holds** the modules:
+
+```bash
+KEYDIR=$(mktemp -d)
+ssh-keygen -t ed25519 -N "" -C "<consumer> reads <owner>/<repo>" -f "$KEYDIR/key"
+gh repo deploy-key add "$KEYDIR/key.pub" --repo <owner>/<repo> --title "<consumer> (read-only)"
+gh secret set FOLIOT_SDK_DEPLOY_KEY --repo <consumer-owner>/<consumer-repo> < "$KEYDIR/key"
+rm -rf "$KEYDIR"
+```
+
+No `--allow-write`, so a leaked key cannot push. **No passphrase** — CI cannot enter one,
+and the resulting `error in libcrypto` names nothing.
+
+Locally, developers need the same two halves: `go env -w GOPRIVATE='github.com/tinbee/*'`
+and a matching `url.insteadOf` in `~/.gitconfig`. Both are in the dotfiles repo
+(`scripts/go.sh` and `git/gitconfig`).
 
 #### Migrating an inline CI job onto this
 
