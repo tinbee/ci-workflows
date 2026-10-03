@@ -113,7 +113,11 @@ on:
       model:
         description: "Model for the review."
         type: string
-        default: "claude-opus-5"
+        default: "claude-sonnet-5-5"
+      effort:
+        description: "Effort level passed to the CLI: low, medium, high, xhigh or max."
+        type: string
+        default: "high"
       max_turns:
         description: >-
           Turn cap, as a runaway guard only -- NOT a budget. The action fails a run whose
@@ -275,7 +279,7 @@ jobs:
           # run, 13 denials and a sixteen-minute review discarded the next. The runner
           # is disposable and nothing is pushed, so Write costs nothing here.
           claude_args: >-
-            --model ${{ inputs.model }} --max-turns ${{ inputs.max_turns }}
+            --model ${{ inputs.model }} --effort ${{ inputs.effort }} --max-turns ${{ inputs.max_turns }}
             --allowedTools "Read,Glob,Grep,Write,Bash(gh api:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),mcp__github_comment__update_claude_comment"
           prompt: |
             You are the cold-context reviewer for this pull request. You have not seen the
