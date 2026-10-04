@@ -433,17 +433,46 @@ to the version on the repository's default branch` — when the PR's copy of the
 
 #### Inputs
 
-| Input              | Default                       | Notes                                                                                                                                                                                                                                                                                                          |
-| ------------------ | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ci_check_name`    | `ci / CI`                     | **The input most likely to be wrong.** A repo whose CI _calls_ a reusable workflow reports `<job id> / <inner job name>`; a repo with an inline job named `CI` reports `CI`. Wrong value means every review is skipped. The step names the mismatch and lists the available names rather than just timing out. |
-| `label`            | `claude-review`               | Consumed as the job's first step.                                                                                                                                                                                                                                                                              |
-| `project_context`  | `""`                          | One or two sentences on what the service is and what language. Without it the model infers the domain from the diff.                                                                                                                                                                                           |
-| `project_rules`    | `docs/review-rules/README.md` | The caller's own invariants. Skipped when absent.                                                                                                                                                                                                                                                              |
-| `rules_ref`        | `v1`                          | Ref of this repo the shared `review-rules/` come from.                                                                                                                                                                                                                                                         |
-| `model`            | `claude-sonnet-5-5`           | Sonnet 5.5, changed from `claude-opus-5` in v1.15.0; set `model` in the caller to go back.                                                                                                                                                                                                                     |
-| `effort`           | `high`                        | Passed as `--effort`: `low`, `medium`, `high`, `xhigh` or `max`.                                                                                                                                                                                                                                               |
-| `max_turns`        | `200`                         | A runaway guard, not a budget: the action fails a run that finishes past the cap after the review is already posted and paid for.                                                                                                                                                                              |
-| `ci_wait_attempts` | `90`                          | 20s each, so 30 minutes.                                                                                                                                                                                                                                                                                       |
+| Input                | Default                       | Notes                                                                                                                                                                                                                                                                                                          |
+| -------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ci_check_name`      | `ci / CI`                     | **The input most likely to be wrong.** A repo whose CI _calls_ a reusable workflow reports `<job id> / <inner job name>`; a repo with an inline job named `CI` reports `CI`. Wrong value means every review is skipped. The step names the mismatch and lists the available names rather than just timing out. |
+| `label`              | `claude-review`               | Consumed as the job's first step.                                                                                                                                                                                                                                                                              |
+| `model_label_prefix` | `claude-review:`              | A label `<prefix><model>[:<effort>]` reviews that one PR with that model; `""` turns it off. See _Choosing a model_.                                                                                                                                                                                           |
+| `project_context`    | `""`                          | One or two sentences on what the service is and what language. Without it the model infers the domain from the diff.                                                                                                                                                                                           |
+| `project_rules`      | `docs/review-rules/README.md` | The caller's own invariants. Skipped when absent.                                                                                                                                                                                                                                                              |
+| `rules_ref`          | `v1`                          | Ref of this repo the shared `review-rules/` come from.                                                                                                                                                                                                                                                         |
+| `model`              | `claude-sonnet-5-5`           | Default model; a model label overrides it per PR. Sonnet 5.5, changed from `claude-opus-5` in v1.15.0.                                                                                                                                                                                                         |
+| `effort`             | `high`                        | Default `--effort`: `low`, `medium`, `high`, `xhigh` or `max`; a model label can override it.                                                                                                                                                                                                                  |
+| `max_turns`          | `200`                         | A runaway guard, not a budget: the action fails a run that finishes past the cap after the review is already posted and paid for.                                                                                                                                                                              |
+| `ci_wait_attempts`   | `90`                          | 20s each, so 30 minutes.                                                                                                                                                                                                                                                                                       |
+
+#### Choosing a model
+
+`claude-review` reviews with the `model` and `effort` inputs. A label named
+`claude-review:<model>[:<effort>]` reviews that one PR with that model instead:
+
+| Label                               | Reviews with                     |
+| ----------------------------------- | -------------------------------- |
+| `claude-review`                     | the `model` / `effort` inputs    |
+| `claude-review:opus`                | `--model opus`, default effort   |
+| `claude-review:claude-opus-5-5:max` | `--model claude-opus-5-5`, `max` |
+| `claude-review:sonnet:xhigh`        | `--model sonnet`, `xhigh`        |
+
+The model goes to the CLI **as written**: an alias (`opus`, `sonnet`) or a full model id, with
+the CLI's optional context suffix (`opus[1m]`). There is no mapping and no allow-list in the
+workflow, so a model released tomorrow works as soon as the CLI accepts its id — create the
+label and nothing else changes. Labels are per repository; create one with
+`gh label create "claude-review:opus"`.
+
+- A label that does not parse (`claude-review:`, an effort that is not one of the five) fails
+  the job in seconds, before the CI wait, with the accepted forms in the error.
+- A model the CLI does not know fails the Review step; it never falls back to the default,
+  because that would answer a different question than the one the label asked. A model newer
+  than the action's CLI still runs, but the CLI assumes a 200k-token window for it.
+- The model is held to a strict shape (letters, digits, `.`, `_`, `-`, optional `[1m]`)
+  because it reaches the CLI's arguments. Whoever can apply a label can choose the model, and
+  so spend its quota; that is triage access, the same people who can request a review.
+- Caller workflows need no change: `types: [labeled]` already fires for every label.
 
 #### Secrets
 

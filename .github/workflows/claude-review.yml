@@ -18,6 +18,18 @@
 # minutes and is read by nobody. The job consumes the label as its first step, so adding
 # it again requests another pass.
 #
+# The label also chooses the model. `claude-review` reviews with the `model` and `effort`
+# inputs. `claude-review:<model>[:<effort>]` -- `claude-review:opus`,
+# `claude-review:claude-opus-5-5:max` -- reviews that one PR with that model instead. The
+# model goes to the CLI verbatim (an alias such as `opus`, or a full model id), so a model
+# released tomorrow works the day the CLI accepts its id: create the label, change nothing
+# here. Nothing is mapped or allow-listed, so nothing goes stale; the value is only held to
+# a strict SHAPE, because it reaches the CLI's arguments. A malformed label fails the job
+# before any review, and a model the CLI rejects fails the Review step -- neither falls back
+# to the default, which would answer a different question than the one the label asked.
+# Whoever can apply a label can pick the model, and so spend its quota: that is triage
+# access, the same people who can already request a review.
+#
 # Runs on a Max subscription token (`claude setup-token`), not an API key. Set
 # CLAUDE_CODE_OAUTH_TOKEN once at the org level OF EACH CALLING ORG: a reusable workflow
 # reads the caller's secrets, never the secrets of the org that hosts it.
@@ -92,6 +104,15 @@ on:
         description: "The label that requests a review. Consumed as the job's first step."
         type: string
         default: "claude-review"
+      model_label_prefix:
+        description: >-
+          A label named `<prefix><model>[:<effort>]` requests a review with that model (and
+          optionally effort) instead of the `model` / `effort` defaults -- for example
+          `claude-review:opus`, or `claude-review:claude-opus-5-5:max`. The model is passed
+          to the CLI as given, so a new model needs only a new label. Set to "" to turn
+          this off.
+        type: string
+        default: "claude-review:"
       project_context:
         description: >-
           One or two sentences telling the reviewer what this service IS and what
@@ -111,11 +132,11 @@ on:
         type: string
         default: "v1"
       model:
-        description: "Model for the review."
+        description: "Default model for the review; a `<prefix><model>` label overrides it for one PR."
         type: string
         default: "claude-sonnet-5-5"
       effort:
-        description: "Effort level passed to the CLI: low, medium, high, xhigh or max."
+        description: "Default effort level passed to the CLI: low, medium, high, xhigh or max."
         type: string
         default: "high"
       max_turns:
@@ -151,11 +172,18 @@ jobs:
     # again". Whether a review actually happens is decided per step below.
     runs-on: ubuntu-latest
     env:
-      REQUESTED: ${{ github.event.label.name == inputs.label }}
+      # `!= ''` first: startsWith(x, '') is true for every x, so an empty prefix would
+      # turn EVERY label on the PR into a review request.
+      REQUESTED: >-
+        ${{ github.event.label.name == inputs.label
+            || (inputs.model_label_prefix != ''
+                && startsWith(github.event.label.name, inputs.model_label_prefix)) }}
       # Drafts are not ready. Fork PRs cannot see the OAuth secret, so a review there
       # would only fail. Everything after label consumption is gated on this.
       ELIGIBLE: >-
-        ${{ github.event.label.name == inputs.label
+        ${{ (github.event.label.name == inputs.label
+             || (inputs.model_label_prefix != ''
+                 && startsWith(github.event.label.name, inputs.model_label_prefix)))
             && github.event.pull_request.draft == false
             && github.event.pull_request.head.repo.full_name == github.repository }}
     permissions:
@@ -174,13 +202,59 @@ jobs:
         if: env.REQUESTED == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          # Through env, not interpolated into the command. Neither value is
-          # attacker-controlled here (a number, and an input from the caller's own
-          # workflow file), but a `run:` block is the wrong place to learn that
-          # distinction the hard way.
+          # Through env, not interpolated into the command. The label name IS
+          # attacker-influenced now (anything starting with the prefix reaches
+          # here), which is exactly why a `run:` block must never see it
+          # interpolated. It is the label that FIRED, not `inputs.label`: with a
+          # model label, removing the default one would leave this one stuck on the
+          # PR, and a label that stays cannot be added again.
           PR: ${{ github.event.pull_request.number }}
-          LABEL: ${{ inputs.label }}
+          LABEL: ${{ github.event.label.name }}
         run: gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --remove-label "$LABEL"
+
+      # Resolve the model from the label BEFORE waiting for CI, so a malformed label
+      # fails in seconds instead of after a half-hour wait. The label name reaches this
+      # step through env only, and the two values that leave it are validated to a
+      # strict shape: they are interpolated into the CLI's arguments below, so they are
+      # checked rather than escaped.
+      - name: Pick the model
+        id: model
+        if: env.ELIGIBLE == 'true'
+        env:
+          LABEL: ${{ github.event.label.name }}
+          BASE_LABEL: ${{ inputs.label }}
+          PREFIX: ${{ inputs.model_label_prefix }}
+          DEFAULT_MODEL: ${{ inputs.model }}
+          DEFAULT_EFFORT: ${{ inputs.effort }}
+        run: |
+          set -euo pipefail
+          model="$DEFAULT_MODEL"
+          effort="$DEFAULT_EFFORT"
+          if [ "$LABEL" != "$BASE_LABEL" ]; then
+            spec="${LABEL#"$PREFIX"}"
+            model="${spec%%:*}"
+            effort="$DEFAULT_EFFORT"
+            if [[ "$spec" == *:* ]]; then
+              effort="${spec#*:}"
+            fi
+            # An alias (`opus`) or a full id (`claude-opus-5-5`), optionally with the CLI's
+            # context-window suffix (`opus[1m]`). No allow-list on purpose -- that list is
+            # what would go stale when the next model ships.
+            if ! [[ "$model" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(\[[0-9]+[km]\])?$ ]]; then
+              echo "::error::Label '${LABEL}' does not name a model. Use '${PREFIX}<model>' or '${PREFIX}<model>:<effort>', e.g. '${PREFIX}opus' or '${PREFIX}claude-opus-5-5:max'. A model is letters, digits, '.', '_' or '-', optionally ending in a context suffix like '[1m]'."
+              exit 1
+            fi
+            case "$effort" in
+              low|medium|high|xhigh|max) ;;
+              *)
+                echo "::error::Label '${LABEL}' has effort '${effort}'. Effort is one of low, medium, high, xhigh, max."
+                exit 1
+                ;;
+            esac
+          fi
+          echo "model=${model}" >> "$GITHUB_OUTPUT"
+          echo "effort=${effort}" >> "$GITHUB_OUTPUT"
+          echo "Reviewing with model '${model}' at effort '${effort}' (label: ${LABEL})"
 
       # A model review of code that does not build, lint or pass tests is wasted quota.
       # Instant when the label is added to an already-green PR; waits when added early.
@@ -279,7 +353,7 @@ jobs:
           # run, 13 denials and a sixteen-minute review discarded the next. The runner
           # is disposable and nothing is pushed, so Write costs nothing here.
           claude_args: >-
-            --model ${{ inputs.model }} --effort ${{ inputs.effort }} --max-turns ${{ inputs.max_turns }}
+            --model ${{ steps.model.outputs.model }} --effort ${{ steps.model.outputs.effort }} --max-turns ${{ inputs.max_turns }}
             --allowedTools "Read,Glob,Grep,Write,Bash(gh api:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),mcp__github_comment__update_claude_comment"
           prompt: |
             You are the cold-context reviewer for this pull request. You have not seen the
