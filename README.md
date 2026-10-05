@@ -504,8 +504,14 @@ on:
   pull_request:
     types: [labeled]
 
+permissions:
+  pull-requests: write
+
 jobs:
   copilot-review:
+    # Any label raises `labeled`; without this the job starts for every one of them
+    # (claude-review, say) and does nothing. Keep it in step with the `label` input.
+    if: github.event.label.name == 'copilot-review'
     uses: tinbee/ci-workflows/.github/workflows/copilot-review.yml@v1
 ```
 
