@@ -14,8 +14,12 @@
 #   on:
 #     pull_request:
 #       types: [labeled]
+#   permissions:
+#     pull-requests: write
 #   jobs:
 #     copilot-review:
+#       # Any label raises this event; skip the job for every other one.
+#       if: github.event.label.name == 'copilot-review'
 #       uses: tinbee/ci-workflows/.github/workflows/copilot-review.yml@v1
 #
 # No secret needed: GITHUB_TOKEN with `pull-requests: write` can request a reviewer,
