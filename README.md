@@ -492,10 +492,12 @@ Requests a Copilot code review **on demand, by label** — the same shape as
 `claude-review.yml`. Add the `copilot-review` label; the job consumes it and asks
 Copilot, so adding it again asks again. Drafts are skipped.
 
-This exists because Copilot's automatic per-push review is what hits the account rate
-limit: with `review_on_push: true` in a repo's ruleset it re-reviews on **every** push, so
-a four-push pull request collects five reviews. `rulesets/protect-main.json` sets that to
-`false`, and this workflow is how you ask for the extra looks you actually want.
+This is the **only** way Copilot reviews a PR. Its automatic review is what hits the
+account rate limit: a ruleset's `copilot_code_review` rule reviews every PR when it opens
+and, with `review_on_push: true`, again on **every** push, so a four-push pull request
+collects five reviews. `rulesets/protect-main.json` therefore has no such rule, and this
+workflow is how you ask for the looks you actually want. A repo that still carries the
+rule reviews automatically regardless of the label: re-apply the canonical ruleset.
 
 ```yaml
 on:
@@ -523,8 +525,9 @@ new review arriving is the only confirmation.
 ## Rulesets
 
 `rulesets/protect-main.json` is the canonical `protect-main` branch ruleset — required
-checks, no force-push, no deletion, PR required, thread resolution required, and Copilot
-review with `review_on_push: false`. One definition instead of one per repo.
+checks, no force-push, no deletion, PR required, and thread resolution required. There is
+no `copilot_code_review` rule on purpose: Copilot reviews on request, by label, through
+`copilot-review.yml`. One definition instead of one per repo.
 
 Applying is **manual and deliberate**, because there is no way to automate it without a
 long-lived credential: reading or writing the rulesets API needs repo **admin**, and

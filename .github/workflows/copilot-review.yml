@@ -1,13 +1,14 @@
 # Reusable workflow: request a Copilot code review on demand, by label.
 #
-# Copilot's automatic per-push review is the problem this replaces. With
-# `copilot_code_review.review_on_push: true` in a ruleset it re-reviews on EVERY push,
-# which is how a four-push pull request collected five reviews and hit the account's
-# rate limit (tinbee/foliot#15, 2026-09-29). The cadence that works is one review when
-# the PR opens, then more only when asked -- which is this.
+# This is the ONLY way Copilot reviews a PR. Its automatic review is the problem this
+# replaces: a ruleset's `copilot_code_review` rule reviews every PR when it opens and,
+# with `review_on_push: true`, again on EVERY push, which is how a four-push pull request
+# collected five reviews and hit the account's rate limit (tinbee/foliot#15, 2026-09-29).
+# Like claude-review, it runs once a PR has settled and someone asks.
 #
-# Turn the automatic re-review off in the same change: rulesets/protect-main.json sets
-# review_on_push to false, and ./rulesets/apply.sh applies it.
+# Turn the automatic review off in the same change: rulesets/protect-main.json has no
+# `copilot_code_review` rule, and ./rulesets/apply.sh applies that. A repo that still has
+# the rule reviews automatically whatever the label says.
 #
 # Consumer repos call this from their own copilot-review.yml:
 #   on:
