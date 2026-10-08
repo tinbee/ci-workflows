@@ -332,6 +332,12 @@ jobs:
         if: inputs.govulncheck
         uses: golang/govulncheck-action@v1
         with:
+          # The action's go-version-input defaults to `stable` and wins over
+          # go-version-file, so the scan would run the newest Go in setup-go's
+          # manifest, which lags a release: go.mod at go1.27.2 against
+          # manifest-stable go1.27.1 stops with "go.mod requires go >= 1.27.2".
+          # Empty lets go-version-file decide, as every other step here does.
+          go-version-input: ""
           go-version-file: ${{ inputs.working_directory }}/${{ inputs.go_version_file }}
           go-package: ./...
           work-dir: ${{ inputs.working_directory }}
