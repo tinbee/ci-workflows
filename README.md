@@ -462,7 +462,8 @@ The model goes to the CLI **as written**: an alias (`opus`, `sonnet`) or a full 
 the CLI's optional context suffix (`opus[1m]`). There is no mapping and no allow-list in the
 workflow, so a model released tomorrow works as soon as the CLI accepts its id — create the
 label and nothing else changes. Labels are per repository; create one with
-`gh label create "claude-review:opus"`.
+`gh label create "claude-review:opus" --color F97316`. Model labels are orange (`F97316`) so
+they read apart from the yellow `claude-review` (`FBC817`) on a PR.
 
 - A label that does not parse (`claude-review:`, an effort that is not one of the five) fails
   the job in seconds, before the CI wait, with the accepted forms in the error.
