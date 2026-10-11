@@ -155,6 +155,16 @@ for wf in "$ROOT"/.github/workflows/*.yml; do
   listed=$(jq -c --arg f "$base" '.workflows[$f].jobs // null | if . then sort else . end' "$HERE/checks.json")
   is "checks.json lists the jobs of $base" "$listed" "$actual"
 done
+# `expects` marks a workflow a repo is wrong to lack, so it belongs only on a gate, and
+# it is exactly one of {file} or {language} with a non-empty string.
+is "expects appears only on gate workflows" \
+  "$(jq -c '[.workflows | to_entries[] | select(.value.expects and .value.gate != true) | .key]' "$HERE/checks.json")" "[]"
+is "every expects names one file or one language" \
+  "$(jq -c '[.workflows | to_entries[] | select(.value.expects)
+      | select((.value.expects | keys) as $k
+          | (($k == ["file"] or $k == ["language"])
+             and (.value.expects[$k[0]] | type == "string" and length > 0)) | not)
+      | .key]' "$HERE/checks.json")" "[]"
 for base in $(jq -r '.workflows | keys[]' "$HERE/checks.json"); do
   if [ -f "$ROOT/.github/workflows/$base" ]; then ok; else fail "checks.json names $base, which does not exist"; fi
 done
