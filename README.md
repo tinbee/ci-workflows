@@ -496,9 +496,10 @@ Copilot, so adding it again asks again. Drafts are skipped.
 This is the **only** way Copilot reviews a PR. Its automatic review is what hits the
 account rate limit: a ruleset's `copilot_code_review` rule reviews every PR when it opens
 and, with `review_on_push: true`, again on **every** push, so a four-push pull request
-collects five reviews. `rulesets/protect-main.json` therefore has no such rule, and this
-workflow is how you ask for the looks you actually want. A repo that still carries the
-rule reviews automatically regardless of the label: re-apply the canonical ruleset.
+collects five reviews. No ruleset group under `rulesets/` therefore has such a rule, and
+this workflow is how you ask for the looks you actually want. A repo that still carries
+the rule reviews automatically regardless of the label: re-apply `pr-flow`, or migrate the
+repo if it is still on the old `protect-main` (see [Rulesets](#rulesets)).
 
 ```yaml
 on:
@@ -531,10 +532,23 @@ new review arriving is the only confirmation.
 
 ## Rulesets
 
-`rulesets/protect-main.json` is the canonical `protect-main` branch ruleset — required
-checks, no force-push, no deletion, PR required, and thread resolution required. There is
-no `copilot_code_review` rule on purpose: Copilot reviews on request, by label, through
-`copilot-review.yml`. One definition instead of one per repo.
+`rulesets/` holds the standard GitHub settings for a repo, split into four groups. One
+definition of each instead of one per repo.
+
+| Group             | File                   | What it enforces                                     | Applies to        |
+| ----------------- | ---------------------- | ---------------------------------------------------- | ----------------- |
+| `branch-safety`   | `branch-safety.json`   | no deletion, no force-push                           | every repo        |
+| `pr-flow`         | `pr-flow.json`         | PR required, stale reviews dismissed, threads resolved | every repo      |
+| `required-checks` | `required-checks.json` | the named checks pass, on an up-to-date branch       | repos that run CI |
+| `repo-settings`   | `repo-settings.json`   | wiki off, projects off, delete branch on merge       | every repo        |
+
+The first three are **separate rulesets** on the repo, and GitHub adds rulesets together.
+That is what lets a repo with no CI take the first two and skip the third, and it means
+correcting one repo's check list is a write that cannot touch its PR rules.
+`repo-settings` is not a ruleset: it is three plain repository settings.
+
+None of them has a bypass actor, and none has a `copilot_code_review` rule: Copilot
+reviews on request, by label, through `copilot-review.yml`.
 
 Applying is **manual and deliberate**, because there is no way to automate it without a
 long-lived credential: reading or writing the rulesets API needs repo **admin**, and
@@ -545,39 +559,73 @@ yourself:
 ```bash
 git clone https://github.com/tinbee/ci-workflows && cd ci-workflows
 
-# See whether a repo has drifted. Exits 0 if it matches, 1 with a diff if not.
-./rulesets/apply.sh --check tinbee/foliot
+# See whether a repo has drifted. Exits 0 on a match, 1 with a diff if not,
+# 2 if it could not look (bad arguments, no admin).
+./rulesets/apply.sh --check pr-flow OWNER/REPO
 
-# Apply it. Creates the ruleset if the repo has none.
-./rulesets/apply.sh tinbee/foliot
+# Apply a group. Creates the ruleset if the repo has none, and writes nothing
+# if it already matches.
+./rulesets/apply.sh branch-safety OWNER/REPO
+./rulesets/apply.sh pr-flow OWNER/REPO
+./rulesets/apply.sh repo-settings OWNER/REPO
 ```
 
-**Extra required checks go on the command line**, and are the only field a repo is
-expected to differ on. Quote any name containing spaces:
+**Required checks go on the command line**, and are the only thing a repo is expected to
+differ on. Quote them; the names contain spaces:
 
 ```bash
-./rulesets/apply.sh tinbee/envmesh 'scope / pr-scope-guard'
+./rulesets/apply.sh required-checks OWNER/REPO 'ci / CI' 'go / CI'
 ```
 
-Syncing the repos currently covered:
+### Which checks a repo requires
+
+A job that calls a reusable workflow reports its check as `<caller job id> / <inner job
+name>`, so a job `ci:` that uses `node-pnpm-ci.yml` reports **`ci / CI`**, not `CI`.
+`rulesets/checks.json` lists the inner job names of every reusable workflow here and
+marks which are safe to require (`gate: true`): only the ones that report on every pull
+request. The review and deploy workflows are not, because a required check that never
+reports is not red, it is absent, and the PR sits `BLOCKED` with everything green.
+
+So a repo's list is: for each job in its workflows that `uses:` a `gate: true` workflow,
+`<that job's id> / <each name in checks.json>`, plus any check its own inline jobs report.
+
+### Moving a repo off `protect-main`
+
+Repos set up before the split have one ruleset named `protect-main`. `--migrate` replaces
+it with the three groups:
 
 ```bash
-./rulesets/apply.sh tinbee/foliot
-./rulesets/apply.sh instastack/instastack
-./rulesets/apply.sh tinbee/envmesh 'scope / pr-scope-guard'
+./rulesets/apply.sh --migrate OWNER/REPO 'ci / CI' 'scope / pr-scope-guard'
 ```
 
-Notes on what it does and does not assert. It resolves the ruleset **by name**, never a
-hardcoded id, because the id differs per repo. It compares only the fields the canonical
-file claims to own — `name`, `target`, `enforcement`, `conditions`, `rules`,
-`bypass_actors` — with keys sorted, so an id, a timestamp or key ordering is never
-reported as drift. An unreadable listing exits 2 with the API's own response rather than
-claiming the ruleset is missing: those need opposite responses, and conflating them would
-send you to the wrong place.
+It writes the groups, reads them back from GitHub, and only then deletes `protect-main`,
+so the repo is never unprotected — for a moment it has both. It refuses, before writing
+anything, if `protect-main` requires a check you did not pass: that check would otherwise
+stop being required with nothing red to show for it. Pass `--allow-dropped-checks` when
+dropping it is the point (a check no workflow reports any more). With no checks at all it
+creates `branch-safety` and `pr-flow` only.
 
-`required_review_thread_resolution` is `true` in the canonical file, and it is the rule
-that actually stops a merge over open findings — both review bots submit as `COMMENTED`,
-so `reviewDecision` stays clean however many threads are unresolved.
+The groups target `~DEFAULT_BRANCH`; `protect-main` targeted `refs/heads/main`.
+
+### What it does and does not assert
+
+It resolves a ruleset **by name**, never a hardcoded id, because the id differs per repo,
+and only among the repo's own rulesets, not ones inherited from the organisation. It
+compares only the fields a group file claims to own — `name`, `target`, `enforcement`,
+`conditions`, `rules`, `bypass_actors` — with keys, rules and checks sorted, so an id, a
+timestamp or ordering is never reported as drift. For `repo-settings` it compares and
+writes only the keys the file lists. An unreadable listing exits 2 with the API's own
+response rather than claiming the ruleset is missing: those need opposite responses, and
+conflating them would send you to the wrong place.
+
+`required_review_thread_resolution` is `true` in `pr-flow.json`, and it is the rule that
+actually stops a merge over open findings — both review bots submit as `COMMENTED`, so
+`reviewDecision` stays clean however many threads are unresolved.
+
+`./rulesets/selftest.sh` tests all of the above against a fake `gh`, with no network, and
+runs in this repo's `lint` job. It also fails if `checks.json` and the workflows disagree
+on a job name — renaming an inner job breaks every consumer's required check, and that
+test is what makes it loud.
 
 ## Versioning
 

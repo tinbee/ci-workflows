@@ -1,0 +1,43 @@
+{
+  "_comment": [
+    "Group 3 of 3: named checks must pass, on a branch that is up to date.",
+    "",
+    "The check list is EMPTY here and filled in per repo from apply.sh's arguments,",
+    "because it is the one thing that legitimately differs: a Node repo requires",
+    "'ci / CI', foliot requires 'ci / CI' and 'go / CI', envmesh adds",
+    "'scope / pr-scope-guard'. checks.json says which reusable workflow reports which",
+    "name.",
+    "",
+    "Only repos that run CI get this group. A required check that never reports does",
+    "not fail -- it leaves every PR permanently BLOCKED with every visible check green,",
+    "so apply.sh refuses to write this ruleset with no checks.",
+    "",
+    "A caller of a reusable workflow reports '<caller job id> / <inner job name>', so",
+    "the name is 'ci / CI', never 'CI'. Derive it from the caller, not from memory.",
+    "",
+    "strict_required_status_checks_policy is true: CI then tests the real merge result,",
+    "which is what catches a branch whose tests pass against an API main has changed.",
+    "",
+    "  ./rulesets/apply.sh [--check] required-checks <owner/repo> 'ci / CI' ['go / CI' ...]"
+  ],
+  "name": "required-checks",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "include": ["~DEFAULT_BRANCH"],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "do_not_enforce_on_create": false,
+        "required_status_checks": []
+      }
+    }
+  ],
+  "bypass_actors": []
+}

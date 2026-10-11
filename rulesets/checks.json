@@ -1,0 +1,32 @@
+{
+  "_comment": [
+    "Which check each reusable workflow reports, and whether it is safe to require.",
+    "",
+    "A repo that calls `uses: tinbee/ci-workflows/.github/workflows/<file>@v1` from a job",
+    "with id `<caller>` reports one check per inner job, named '<caller> / <job>'. A tool",
+    "that reads a repo's workflows can therefore work out its required-check list from",
+    "this file alone, without guessing from the repo's language.",
+    "",
+    "`gate` is true only for a workflow that reports on EVERY pull request. Requiring",
+    "anything else blocks merges forever: the review workflows run on a label, the deploy",
+    "workflows on push to main, and a required check that never reports is not red, it is",
+    "simply absent.",
+    "",
+    "selftest.sh fails if this file and .github/workflows disagree -- a workflow missing",
+    "here, an entry for a file that is gone, or a job name that was renamed. Renaming an",
+    "inner job is a breaking change for every consumer's ruleset; that test is what makes",
+    "it loud.",
+    "",
+    "No repo names belong in this file. This repository is public."
+  ],
+  "workflows": {
+    "node-pnpm-ci.yml": { "jobs": ["CI"], "gate": true },
+    "go-ci.yml": { "jobs": ["CI"], "gate": true },
+    "pr-scope-guard.yml": { "jobs": ["pr-scope-guard"], "gate": true },
+    "db-migration-callout.yml": { "jobs": ["callout"], "gate": false },
+    "claude-review.yml": { "jobs": ["review"], "gate": false },
+    "copilot-review.yml": { "jobs": ["request"], "gate": false },
+    "deploy-gh-pages.yml": { "jobs": ["build", "deploy"], "gate": false },
+    "deploy-s3-cloudfront.yml": { "jobs": ["deploy"], "gate": false }
+  }
+}

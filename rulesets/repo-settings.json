@@ -1,0 +1,20 @@
+{
+  "_comment": [
+    "Not a ruleset: plain repository settings, applied with PATCH /repos/{owner}/{repo}.",
+    "It lives beside the rulesets because apply.sh applies it the same way and the same",
+    "question -- does this repo match the standard -- covers both.",
+    "",
+    "Only keys listed here are compared or written. Anything else about a repo is its",
+    "own business.",
+    "",
+    "has_wiki / has_projects false: neither is used, and an enabled wiki on a public repo",
+    "is a page anyone with an account can be invited to edit.",
+    "delete_branch_on_merge true: merged branches otherwise pile up, and a stale branch",
+    "is where a PR cut from someone else's work comes from.",
+    "",
+    "  ./rulesets/apply.sh [--check] repo-settings <owner/repo>"
+  ],
+  "has_wiki": false,
+  "has_projects": false,
+  "delete_branch_on_merge": true
+}
