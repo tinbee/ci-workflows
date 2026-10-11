@@ -1,0 +1,56 @@
+# This repository's own on-demand reviews: it calls the two review workflows it
+# publishes, the way every consumer does. Add the `claude-review` or `copilot-review`
+# label once a PR has settled; each job consumes its label, so adding it again requests
+# another pass. `claude-review:<model>[:<effort>]` reviews that one PR with that model.
+#
+# Both are called at @v1, not by a local `./` path: a consumer gets the released
+# workflow, so that is the one worth exercising here, and a tool reading this file sees
+# the same `uses:` it sees everywhere else.
+#
+# Two limits that are structural, not bugs (see the header of claude-review.yml):
+#   - This file has to be on `main` with identical content for the Claude review to run.
+#     A PR that adds or edits it cannot review itself, and the job is GREEN when it
+#     refuses.
+#   - CLAUDE_CODE_OAUTH_TOKEN must reach this repository. It is public, and an org secret
+#     limited to private repositories does not.
+name: review
+
+on:
+  pull_request:
+    types: [labeled]
+
+# The default workflow token here is read-only, so each job states what it needs. A
+# reusable workflow cannot request more than its caller holds.
+permissions: {}
+
+jobs:
+  claude-review:
+    permissions:
+      contents: read
+      checks: read
+      issues: write
+      pull-requests: write
+      id-token: write
+    uses: tinbee/ci-workflows/.github/workflows/claude-review.yml@v1
+    with:
+      # CI here is the inline `lint` job, so the check has no "<caller> / " prefix.
+      ci_check_name: "lint"
+      project_context: >-
+        Reusable GitHub Actions workflows (.github/workflows, called by other repositories
+        at the floating tag v1) and the branch-protection standard those repositories are
+        held to (rulesets/: JSON group files plus apply.sh, bash and jq, which checks and
+        applies them through the GitHub API). The repository is public and its workflows
+        run with other repositories' secrets, so read for anything that widens a token's
+        permissions, interpolates untrusted input into a `run:` script, unpins an action
+        from a commit SHA, or names a private repository. Renaming an inner job is a
+        breaking change: consumers require the check by name.
+    # Explicit, not `inherit`: it works from every org, which is what consumers are told.
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+  copilot-review:
+    # Any label raises this event; skip the job for every other one.
+    if: github.event.label.name == 'copilot-review'
+    permissions:
+      pull-requests: write
+    uses: tinbee/ci-workflows/.github/workflows/copilot-review.yml@v1

@@ -272,7 +272,7 @@ jobs:
           go-version-file: ${{ inputs.working_directory }}/${{ inputs.go_version_file }}
           cache-dependency-path: ${{ inputs.working_directory }}/go.sum
 
-      - uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1
+      - uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0
         if: inputs.buf
         with:
           setup_only: true

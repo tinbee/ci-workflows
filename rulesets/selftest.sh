@@ -155,6 +155,23 @@ for wf in "$ROOT"/.github/workflows/*.yml; do
   listed=$(jq -c --arg f "$base" '.workflows[$f].jobs // null | if . then sort else . end' "$HERE/checks.json")
   is "checks.json lists the jobs of $base" "$listed" "$actual"
 done
+# `expects` marks a workflow a repo is wrong to lack. It is exactly one of {file} or
+# {language} with a non-empty string, or {always: true}. The first two key on a repo's
+# stack and belong only on a gate; `always` is for the label-triggered review.
+is "a file or language expects appears only on gate workflows" \
+  "$(jq -c '[.workflows | to_entries[]
+      | select(.value.expects and (.value.expects | has("always") | not) and .value.gate != true)
+      | .key]' "$HERE/checks.json")" "[]"
+is "every expects names one file, one language, or always" \
+  "$(jq -c '[.workflows | to_entries[] | select(.value.expects)
+      | select((.value.expects | keys) as $k
+          | ((($k == ["file"] or $k == ["language"])
+              and (.value.expects[$k[0]] | type == "string" and length > 0))
+             or ($k == ["always"] and .value.expects.always == true)) | not)
+      | .key]' "$HERE/checks.json")" "[]"
+is "the workflows every repo ought to call" \
+  "$(jq -c '[.workflows | to_entries[] | select(.value.expects.always == true) | .key]' "$HERE/checks.json")" \
+  '["claude-review.yml"]'
 for base in $(jq -r '.workflows | keys[]' "$HERE/checks.json"); do
   if [ -f "$ROOT/.github/workflows/$base" ]; then ok; else fail "checks.json names $base, which does not exist"; fi
 done
