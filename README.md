@@ -589,6 +589,15 @@ reports is not red, it is absent, and the PR sits `BLOCKED` with everything gree
 So a repo's list is: for each job in its workflows that `uses:` a `gate: true` workflow,
 `<that job's id> / <each name in checks.json>`, plus any check its own inline jobs report.
 
+`expects` on an entry says which repos ought to call that workflow: `node-pnpm-ci.yml`
+where there is a `pnpm-lock.yaml` at the root, `go-ci.yml` where GitHub detects Go. A
+repo that matches and calls neither from a pull-request workflow is one that wrote its
+own CI, or has none.
+
+`"always": true` is the third form, for a workflow every repo ought to call whatever its
+stack. `claude-review.yml` carries it: the review runs on a label, so its caller is not
+a gate and is never required, but a repo without one gets no review at all.
+
 ### Moving a repo off `protect-main`
 
 Repos set up before the split have one ruleset named `protect-main`. `--migrate` replaces
