@@ -594,6 +594,10 @@ where there is a `pnpm-lock.yaml` at the root, `go-ci.yml` where GitHub detects 
 repo that matches and calls neither from a pull-request workflow is one that wrote its
 own CI, or has none.
 
+`"always": true` is the third form, for a workflow every repo ought to call whatever its
+stack. `claude-review.yml` carries it: the review runs on a label, so its caller is not
+a gate and is never required, but a repo without one gets no review at all.
+
 ### Moving a repo off `protect-main`
 
 Repos set up before the split have one ruleset named `protect-main`. `--migrate` replaces
