@@ -1,6 +1,13 @@
 # Actions in .github/workflows are pinned to commit SHAs, so a moved or hijacked tag
 # upstream cannot change what runs in every consumer. A SHA never updates on its own,
 # though -- this is what keeps the pins current, as reviewable PRs.
+#
+# Minor and patch bumps arrive together in one PR. A MAJOR bump is left out of the group
+# on purpose, so each one opens its own PR: the `lint` check here only validates workflow
+# syntax and never runs the CI or deploy workflows, so a green check says nothing about
+# whether a new major still works. One major per PR is one set of release notes to read
+# and one thing to revert. (The first grouped run mixed six majors with three small
+# bumps, #30.)
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -8,5 +15,6 @@ updates:
     schedule:
       interval: weekly
     groups:
-      actions:
+      actions-minor-patch:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
