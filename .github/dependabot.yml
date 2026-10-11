@@ -1,0 +1,12 @@
+# Actions in .github/workflows are pinned to commit SHAs, so a moved or hijacked tag
+# upstream cannot change what runs in every consumer. A SHA never updates on its own,
+# though -- this is what keeps the pins current, as reviewable PRs.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

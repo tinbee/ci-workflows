@@ -144,6 +144,11 @@ jobs:
     name: CI
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout_minutes }}
+    # Declared here because a reusable workflow otherwise inherits the CALLING repo's
+    # default token, which is read-write wherever that repo has not tightened it. Nothing
+    # in this job writes to the repo, so a compromised action gets a read-only token.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -262,17 +267,17 @@ jobs:
         if: inputs.pre_command != ''
         run: ${{ inputs.pre_command }}
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: ${{ inputs.working_directory }}/${{ inputs.go_version_file }}
           cache-dependency-path: ${{ inputs.working_directory }}/go.sum
 
-      - uses: bufbuild/buf-action@v1
+      - uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1
         if: inputs.buf
         with:
           setup_only: true
 
-      - uses: sqlc-dev/setup-sqlc@v5
+      - uses: sqlc-dev/setup-sqlc@bac53b7fb28c039a6c7f5736fd1e89744021bdd6 # v5
         if: inputs.sqlc_version != ''
         with:
           sqlc-version: ${{ inputs.sqlc_version }}
@@ -299,7 +304,7 @@ jobs:
       # version string 'v2.14' ... you must update to golangci-lint-action v7". Every
       # config here is on golangci-lint v2, so the action has to be v7 or newer; v9 also
       # runs on node24, which v6 no longer does.
-      - uses: golangci/golangci-lint-action@v9
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         if: inputs.golangci_version != ''
         with:
           version: ${{ inputs.golangci_version }}
@@ -330,7 +335,7 @@ jobs:
 
       - name: Known vulnerabilities in reachable code
         if: inputs.govulncheck
-        uses: golang/govulncheck-action@v1
+        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1
         with:
           # The action's go-version-input defaults to `stable` and wins over
           # go-version-file, so the scan would run the newest Go in setup-go's

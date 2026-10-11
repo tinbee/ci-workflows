@@ -90,6 +90,11 @@ jobs:
     name: CI
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout_minutes }}
+    # Declared here because a reusable workflow otherwise inherits the CALLING repo's
+    # default token, which is read-write wherever that repo has not tightened it. Nothing
+    # in this job writes to the repo, so a compromised action gets a read-only token.
+    permissions:
+      contents: read
     # Turbo Remote Cache config, exported to every step. All optional —
     # when unset (the common case) the empty values are equivalent to
     # "no remote cache" and turbo builds locally. TURBO_TOKEN is a secret;
@@ -102,7 +107,7 @@ jobs:
       TURBO_TOKEN: ${{ secrets.turbo_token }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set env from env_json input
         if: inputs.env_json != '{}' && inputs.env_json != ''
@@ -116,21 +121,21 @@ jobs:
           echo "$ENV_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> "$GITHUB_ENV"
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
 
       # Two setup-node steps gated on node_version_file because the
       # `node-version-file:` and `node-version:` inputs are mutually
       # exclusive (specifying both errors out).
       - name: Setup Node (from file)
         if: inputs.node_version_file != ''
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: ${{ inputs.node_version_file }}
           cache: pnpm
 
       - name: Setup Node (from literal)
         if: inputs.node_version_file == ''
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: ${{ inputs.node_version }}
           cache: pnpm
@@ -197,7 +202,7 @@ jobs:
           inputs.coverage_artifact_path != '' &&
           github.event_name == 'push' &&
           github.ref_name == github.event.repository.default_branch
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ inputs.coverage_artifact_name }}
           path: ${{ inputs.coverage_artifact_path }}
