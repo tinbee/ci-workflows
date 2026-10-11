@@ -589,6 +589,11 @@ reports is not red, it is absent, and the PR sits `BLOCKED` with everything gree
 So a repo's list is: for each job in its workflows that `uses:` a `gate: true` workflow,
 `<that job's id> / <each name in checks.json>`, plus any check its own inline jobs report.
 
+`expects` on an entry says which repos ought to call that workflow: `node-pnpm-ci.yml`
+where there is a `pnpm-lock.yaml` at the root, `go-ci.yml` where GitHub detects Go. A
+repo that matches and calls neither from a pull-request workflow is one that wrote its
+own CI, or has none.
+
 ### Moving a repo off `protect-main`
 
 Repos set up before the split have one ruleset named `protect-main`. `--migrate` replaces
