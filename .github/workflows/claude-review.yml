@@ -156,14 +156,17 @@ on:
         default: 90
       show_full_output:
         description: >-
-          Print every tool call and result in the Review step's log. On by default because
-          a denied call is otherwise invisible: the run ends green or fails with "published
-          nothing" and nothing names what was refused. The cost is that the log carries
-          tool RESULTS -- file contents and the diff -- so a secret that appears in either
-          is printed to anyone who can read this repo's Actions logs. Set false for a repo
-          whose diffs may contain material that must stay out of logs.
+          Print every tool call and result in the Review step's log, so a denied call is
+          named: without it the run ends green or fails with "published nothing" and nothing
+          says what was refused. OFF by default, because the log then carries tool RESULTS
+          -- file contents and the diff -- and a secret in either is printed to anyone who
+          can read the caller's Actions logs (to everyone, in a public repo). To turn it on
+          while troubleshooting ONE repo without editing its caller, set the repository (or
+          organization) variable CLAUDE_REVIEW_SHOW_FULL_OUTPUT to `true`, add the label
+          again, and delete the variable afterwards. The variable and this input are ORed:
+          either one enables it, neither can force it off.
         type: boolean
-        default: true
+        default: false
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         description: "OAuth token from `claude setup-token`. Without it the review cannot run."
@@ -236,6 +239,9 @@ jobs:
           PREFIX: ${{ inputs.model_label_prefix }}
           DEFAULT_MODEL: ${{ inputs.model }}
           DEFAULT_EFFORT: ${{ inputs.effort }}
+          # `vars` in a reusable workflow is the CALLER's repository/organization
+          # variables, which is what lets one repo switch this on without a code change.
+          FULL_OUTPUT: ${{ inputs.show_full_output || vars.CLAUDE_REVIEW_SHOW_FULL_OUTPUT == 'true' }}
         run: |
           set -euo pipefail
           model="$DEFAULT_MODEL"
@@ -262,9 +268,12 @@ jobs:
                 ;;
             esac
           fi
-          echo "model=${model}" >> "$GITHUB_OUTPUT"
-          echo "effort=${effort}" >> "$GITHUB_OUTPUT"
-          echo "Reviewing with model '${model}' at effort '${effort}' (label: ${LABEL})"
+          {
+            echo "model=${model}"
+            echo "effort=${effort}"
+            echo "full_output=${FULL_OUTPUT}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Reviewing with model '${model}' at effort '${effort}' (label: ${LABEL}); full tool output: ${FULL_OUTPUT}"
 
       # A model review of code that does not build, lint or pass tests is wasted quota.
       # Instant when the label is added to an already-green PR; waits when added early.
@@ -353,7 +362,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           use_sticky_comment: true
-          show_full_output: ${{ inputs.show_full_output }}
+          show_full_output: ${{ steps.model.outputs.full_output }}
           # In prompt mode nothing is published unless the prompt says so AND the tool is
           # allowed. Least privilege: read the workspace (the rule docs), the PR
           # diff/view verbs, the comment verb, and Write -- the prompt asks for the
