@@ -445,6 +445,7 @@ to the version on the repository's default branch` — when the PR's copy of the
 | `effort`             | `high`                        | Default `--effort`: `low`, `medium`, `high`, `xhigh` or `max`; a model label can override it.                                                                                                                                                                                                                  |
 | `max_turns`          | `200`                         | A runaway guard, not a budget: the action fails a run that finishes past the cap after the review is already posted and paid for.                                                                                                                                                                              |
 | `ci_wait_attempts`   | `90`                          | 20s each, so 30 minutes.                                                                                                                                                                                                                                                                                       |
+| `show_full_output`   | `false`                       | Prints every tool call and result in the Review log, so a denied call is named; the log then carries file contents and the diff. To troubleshoot one repo, set its variable `CLAUDE_REVIEW_SHOW_FULL_OUTPUT` to `true` (ORed with this input), re-add the label, then delete it.                               |
 
 #### Choosing a model
 
