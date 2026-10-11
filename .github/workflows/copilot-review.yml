@@ -6,9 +6,9 @@
 # collected five reviews and hit the account's rate limit (tinbee/foliot#15, 2026-09-29).
 # Like claude-review, it runs once a PR has settled and someone asks.
 #
-# Turn the automatic review off in the same change: rulesets/protect-main.json has no
-# `copilot_code_review` rule, and ./rulesets/apply.sh applies that. A repo that still has
-# the rule reviews automatically whatever the label says.
+# Turn the automatic review off in the same change: no ruleset group under rulesets/ has
+# a `copilot_code_review` rule, and ./rulesets/apply.sh applies them. A repo that still
+# has the rule reviews automatically whatever the label says.
 #
 # Consumer repos call this from their own copilot-review.yml:
 #   on:

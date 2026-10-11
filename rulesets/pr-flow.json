@@ -1,0 +1,59 @@
+{
+  "_comment": [
+    "Group 2 of 3: changes reach the default branch through a pull request, and a PR",
+    "with open review threads cannot merge.",
+    "",
+    "required_review_thread_resolution is TRUE, and it is what actually prevents a merge",
+    "over open findings: both review bots submit as COMMENTED, so reviewDecision stays",
+    "clean however many threads are unresolved.",
+    "",
+    "required_approving_review_count is 0 because GitHub does not let a PR author approve",
+    "their own PR -- 1 makes every solo PR unmergeable (tinbee/web PRs #2 and #3).",
+    "",
+    "There is deliberately NO copilot_code_review rule, here or in any group. That rule",
+    "makes Copilot review automatically -- on every PR when it opens, and on every push",
+    "with review_on_push -- which is how a four-push PR collected five reviews and hit the",
+    "account rate limit (tinbee/foliot#15, 2026-09-29). Copilot reviews only when asked:",
+    "add the `copilot-review` label and copilot-review.yml requests it, the same shape as",
+    "claude-review. By hand that is:",
+    "",
+    "  gh api repos/OWNER/REPO/pulls/N/requested_reviewers -X POST \\",
+    "    -f 'reviewers[]=copilot-pull-request-reviewer[bot]'",
+    "",
+    "The [bot] suffix is required -- without it the API answers 422 'Reviews may only be",
+    "requested from collaborators', which makes it look impossible. requested_reviewers",
+    "reads empty straight afterwards because Copilot consumes the request rather than",
+    "queueing it, so a new review appearing is the only confirmation.",
+    "",
+    "Every parameter GitHub echoes back is spelled out, defaults included, so that a",
+    "byte-for-byte comparison with the live ruleset is meaningful.",
+    "",
+    "  ./rulesets/apply.sh [--check] pr-flow <owner/repo>"
+  ],
+  "name": "pr-flow",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "include": ["~DEFAULT_BRANCH"],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": true,
+        "required_reviewers": [],
+        "require_code_owner_review": false,
+        "dismissal_restriction": { "enabled": false, "allowed_actors": [] },
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": true,
+        "require_extra_approval_for_unattributed_changes": true,
+        "allowed_merge_methods": ["merge", "squash", "rebase"]
+      }
+    }
+  ],
+  "bypass_actors": []
+}

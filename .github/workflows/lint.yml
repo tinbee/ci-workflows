@@ -6,8 +6,11 @@ name: lint
 #   - missing required action inputs / wrong types
 #   - shellcheck issues in inline `run:` blocks
 #
-# Required-status-check context: "lint / lint" (matches the ruleset
-# in .github/rulesets/main.json).
+# Also runs rulesets/selftest.sh: the group files, checks.json against the
+# workflows' real job names, and apply.sh against a fake `gh`.
+#
+# Required-status-check context: "lint". This job is not called through a
+# reusable workflow, so there is no "<caller> / " prefix.
 
 on:
   push:
@@ -42,3 +45,8 @@ jobs:
 
       - name: Run actionlint
         run: ./actionlint -color
+
+      # jq and yq are preinstalled on ubuntu-latest. No network, no token: `gh` is
+      # replaced by a fake inside the script.
+      - name: Ruleset selftest
+        run: ./rulesets/selftest.sh

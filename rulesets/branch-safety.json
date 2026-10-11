@@ -1,0 +1,32 @@
+{
+  "_comment": [
+    "Group 1 of 3: the branch cannot be deleted or force-pushed, by anyone.",
+    "",
+    "Applies to every repo, including ones with no CI and no PR habit yet -- it costs",
+    "nothing and is the part whose absence is unrecoverable.",
+    "",
+    "bypass_actors is empty on purpose. A bypass actor is a standing exception nothing",
+    "audits; a fleet survey on 2026-09-29 found 6 of 8 ruleset repos with none, and the",
+    "rest were brought in line.",
+    "",
+    "~DEFAULT_BRANCH, not refs/heads/main: it survives a default-branch rename and covers",
+    "a repo still on master. The old single protect-main ruleset stayed on refs/heads/main",
+    "only because changing it would have reported drift everywhere at once; these are new",
+    "rulesets, so there is no installed base to disagree with.",
+    "",
+    "GitHub ignores unknown members, and apply.sh strips every _comment* key anyway.",
+    "",
+    "  ./rulesets/apply.sh [--check] branch-safety <owner/repo>"
+  ],
+  "name": "branch-safety",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "include": ["~DEFAULT_BRANCH"],
+      "exclude": []
+    }
+  },
+  "rules": [{ "type": "deletion" }, { "type": "non_fast_forward" }],
+  "bypass_actors": []
+}
