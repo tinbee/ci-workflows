@@ -118,28 +118,28 @@ jobs:
           echo "All required inputs and secrets are present."
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Setup pnpm
         # v6 = Node 24 native runtime + pnpm v11 support. Earlier v4 ran
         # on Node 20 and required FORCE_JAVASCRIPT_ACTIONS_TO_NODE24 at
         # workflow level — no longer needed with v6.
         if: inputs.setup_pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
 
       # Two setup-node steps gated on `setup_pnpm` because the `cache:`
       # input doesn't accept a dynamic empty-string fallback — only one
       # of npm/pnpm/yarn or the input must be omitted entirely.
       - name: Setup Node (with pnpm cache)
         if: inputs.setup_pnpm
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: ${{ inputs.node_version }}
           cache: pnpm
 
       - name: Setup Node (no cache)
         if: ${{ !inputs.setup_pnpm }}
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: ${{ inputs.node_version }}
 
@@ -160,7 +160,7 @@ jobs:
         run: ${{ inputs.build_command }}
 
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
         with:
           role-to-assume: ${{ secrets.role_to_assume }}
           aws-region: ${{ inputs.aws_region }}
