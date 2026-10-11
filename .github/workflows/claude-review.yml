@@ -154,6 +154,16 @@ on:
         description: "Polls of 20s each while waiting for CI. 90 = 30 minutes."
         type: number
         default: 90
+      show_full_output:
+        description: >-
+          Print every tool call and result in the Review step's log. On by default because
+          a denied call is otherwise invisible: the run ends green or fails with "published
+          nothing" and nothing names what was refused. The cost is that the log carries
+          tool RESULTS -- file contents and the diff -- so a secret that appears in either
+          is printed to anyone who can read this repo's Actions logs. Set false for a repo
+          whose diffs may contain material that must stay out of logs.
+        type: boolean
+        default: true
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         description: "OAuth token from `claude setup-token`. Without it the review cannot run."
@@ -343,6 +353,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           use_sticky_comment: true
+          show_full_output: ${{ inputs.show_full_output }}
           # In prompt mode nothing is published unless the prompt says so AND the tool is
           # allowed. Least privilege: read the workspace (the rule docs), the PR
           # diff/view verbs, the comment verb, and Write -- the prompt asks for the
@@ -368,6 +379,16 @@ jobs:
             go on the code. Then read `${{ inputs.project_rules }}` if it exists, for this
             project's own invariants, which add to the general rules rather than replacing
             them.
+
+            Save the diff to a file and read THAT, never the command's own output:
+
+              gh pr diff ${{ github.event.pull_request.number }} > /tmp/pr.diff
+
+            A large diff is cut off or refused when it arrives as a tool result, which
+            ended a review before it began. `Read` the file in ranges (offset and limit)
+            and keep going until you reach the end -- a diff you read only the start of is
+            a diff you did not review. Use `gh pr diff ... --name-only` first to see how
+            many files there are.
 
             Review the diff against those rules and against ordinary correctness.
 
