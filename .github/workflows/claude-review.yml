@@ -348,6 +348,29 @@ jobs:
           sparse-checkout: review-rules
           sparse-checkout-cone-mode: false
 
+      # The diff goes to a file HERE, not from inside the review: the reviewer's own
+      # `gh pr diff > file` is refused (a redirection needs approval, in /tmp and in the
+      # workspace alike -- five denials in one run), and a large diff returned as a tool
+      # result is cut off, which sent the reviewer off to delegate and end its turn. A
+      # step has no such limit; the reviewer just `Read`s the file in ranges.
+      - name: Save the PR diff for the reviewer
+        if: env.ELIGIBLE == 'true' && steps.ci.outputs.result == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -uo pipefail
+          mkdir -p .review-context
+          gh pr diff "$PR" --name-only > .review-context/files.txt \
+            || echo "::warning::could not list the changed files"
+          if gh pr diff "$PR" > .review-context/pr.diff; then
+            echo "Saved $(wc -l < .review-context/pr.diff) diff lines across $(wc -l < .review-context/files.txt) files"
+          else
+            # GitHub refuses very large diffs (20k lines). The reviewer is told what to do.
+            echo "::warning::gh pr diff failed -- the reviewer gets the file list only"
+            : > .review-context/pr.diff
+          fi
+
       # The publish gate below needs to know what "new" means.
       - name: Mark the review start
         id: started
@@ -375,6 +398,7 @@ jobs:
           claude_args: >-
             --model ${{ steps.model.outputs.model }} --effort ${{ steps.model.outputs.effort }} --max-turns ${{ inputs.max_turns }}
             --allowedTools "Read,Glob,Grep,Write,Bash(gh api:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),mcp__github_comment__update_claude_comment"
+            --disallowedTools "Agent,Task"
           prompt: |
             You are the cold-context reviewer for this pull request. You have not seen the
             author's reasoning, and the PR description's justifications are not evidence.
@@ -389,15 +413,19 @@ jobs:
             project's own invariants, which add to the general rules rather than replacing
             them.
 
-            Save the diff to a file and read THAT, never the command's own output:
+            The diff is already on disk: `.review-context/pr.diff`, with the changed file
+            names in `.review-context/files.txt`. Read those. Do NOT run `gh pr diff`
+            and do not try to redirect its output -- redirection is refused. A large diff
+            is cut off when it arrives as a tool result, so `Read` the file in ranges
+            (offset and limit) and keep going until you reach the end -- a diff you read
+            only the start of is a diff you did not review. If `pr.diff` is empty, the
+            diff was too large for GitHub to serve: review the files in `files.txt`
+            directly from the workspace and say in the summary that you had no diff.
 
-              gh pr diff ${{ github.event.pull_request.number }} > /tmp/pr.diff
-
-            A large diff is cut off or refused when it arrives as a tool result, which
-            ended a review before it began. `Read` the file in ranges (offset and limit)
-            and keep going until you reach the end -- a diff you read only the start of is
-            a diff you did not review. Use `gh pr diff ... --name-only` first to see how
-            many files there are.
+            Do the review yourself, in this session. Do not launch subagents or background
+            tasks: this run is headless, so a turn that ends while work is outstanding ends
+            the run, the work is discarded and nothing is posted. Do not end your turn
+            until the review has been posted.
 
             Review the diff against those rules and against ordinary correctness.
 
@@ -452,7 +480,7 @@ jobs:
             ANCHORING RULES -- the API rejects the WHOLE review if one comment is
             misplaced, which throws away the entire run:
               - `path` and `line` must name a line the diff actually touches. Get them
-                from `gh pr diff`; do not guess from reading the file.
+                from `.review-context/pr.diff`; do not guess from reading the file.
               - `side: "RIGHT"` for added or changed lines, `"LEFT"` only for a line the
                 diff removes.
               - A finding you cannot anchor goes in `body`. Never invent a line to hang
