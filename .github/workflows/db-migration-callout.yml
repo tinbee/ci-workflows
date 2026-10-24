@@ -134,8 +134,12 @@ jobs:
           LABEL: ${{ inputs.label }}
         run: |
           set -euo pipefail
+          # Match on the author as well as the marker: anyone who can
+          # comment can post the marker, and adopting their comment would
+          # hand them the warning to edit away. github.token posts as
+          # github-actions[bot], a login no user can register.
           existing=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
-            --jq '[.[] | select(.body | startswith("<!-- db-migration-callout -->"))][0].id // empty')
+            --jq '[.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- db-migration-callout -->")))][0].id // empty')
           if [ -n "$existing" ]; then
             gh api -X PATCH "repos/$REPO/issues/comments/$existing" -F body=@body.md > /dev/null
             echo "Updated existing call-out comment $existing"
@@ -157,8 +161,9 @@ jobs:
           LABEL: ${{ inputs.label }}
         run: |
           set -euo pipefail
+          # Same author filter as the post step: only our own call-out.
           existing=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
-            --jq '[.[] | select(.body | startswith("<!-- db-migration-callout -->"))][0].id // empty')
+            --jq '[.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- db-migration-callout -->")))][0].id // empty')
           if [ -n "$existing" ]; then
             printf '<!-- db-migration-callout -->\n## 🗄️ Database migration in this PR\n\n_This PR no longer contains migration changes._\n' > body.md
             gh api -X PATCH "repos/$REPO/issues/comments/$existing" -F body=@body.md > /dev/null
