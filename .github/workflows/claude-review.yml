@@ -30,9 +30,16 @@
 # Whoever can apply a label can pick the model, and so spend its quota: that is triage
 # access, the same people who can already request a review.
 #
-# Runs on a Max subscription token (`claude setup-token`), not an API key. Set
-# CLAUDE_CODE_OAUTH_TOKEN once at the org level OF EACH CALLING ORG: a reusable workflow
-# reads the caller's secrets, never the secrets of the org that hosts it.
+# Two ways to authenticate; give the job exactly one.
+#   - A Max subscription token (`claude setup-token`) passed as CLAUDE_CODE_OAUTH_TOKEN. Set
+#     it once at the org level OF EACH CALLING ORG: a reusable workflow reads the caller's
+#     secrets, never the secrets of the org that hosts it.
+#   - Workload identity federation: the four `anthropic_*` inputs below. The job's GitHub
+#     OIDC token is exchanged for a short-lived Anthropic credential, so there is no
+#     long-lived secret to store or leak. Prefer it for a PUBLIC repository, whose logs
+#     anyone can read. The IDs are not secrets; pass them from repository variables. The
+#     federation rule should match `event_name: pull_request` and this file's
+#     `job_workflow_ref`, so no other job in the repository can mint a credential.
 #
 # Consumer repos call this from their own claude-review.yml:
 #   on:
@@ -167,10 +174,33 @@ on:
           either one enables it, neither can force it off.
         type: boolean
         default: false
+      anthropic_federation_rule_id:
+        description: >-
+          Workload identity federation rule (fdrl_...). With anthropic_organization_id set,
+          the review authenticates by exchanging the job's GitHub OIDC token instead of using
+          CLAUDE_CODE_OAUTH_TOKEN, which is then not read. Not a secret.
+        type: string
+        default: ""
+      anthropic_organization_id:
+        description: "Anthropic organization UUID, for workload identity federation. Not a secret."
+        type: string
+        default: ""
+      anthropic_service_account_id:
+        description: "Service account (svac_...) the federated credential acts as. Not a secret."
+        type: string
+        default: ""
+      anthropic_workspace_id:
+        description: >-
+          Workspace (wrkspc_...) for workload identity federation; optional when the rule
+          targets a single workspace. Not a secret.
+        type: string
+        default: ""
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
-        description: "OAuth token from `claude setup-token`. Without it the review cannot run."
-        required: true
+        description: >-
+          OAuth token from `claude setup-token`. Required unless the anthropic_* federation
+          inputs are set; the review cannot run without one or the other.
+        required: false
 
 # Re-adding the label while a run is in flight replaces it. The label name is part of the
 # group so an unrelated label (whose run is skipped) cannot cancel a review in progress.
@@ -205,7 +235,8 @@ jobs:
       pull-requests: write
       issues: write
       # Required by anthropics/claude-code-action: it exchanges the job's OIDC token for
-      # the short-lived GitHub App token it comments with. No step of ours uses it.
+      # the short-lived GitHub App token it comments with, and, under workload identity
+      # federation, for the Anthropic credential the review runs on.
       id-token: write
     steps:
       # First, not last. A run cancelled by a re-label (concurrency above) never reaches
@@ -224,6 +255,23 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           LABEL: ${{ github.event.label.name }}
         run: gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --remove-label "$LABEL"
+
+      # Fail in seconds, not after the CI wait, when no credential reaches the job. The
+      # secret is tested through env, never echoed.
+      - name: Check a credential is configured
+        if: env.ELIGIBLE == 'true'
+        env:
+          HAS_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+          FEDERATED: ${{ inputs.anthropic_federation_rule_id != '' && inputs.anthropic_organization_id != '' }}
+        run: |
+          if [ "$FEDERATED" = "true" ]; then
+            echo "Authenticating with workload identity federation"
+          elif [ "$HAS_TOKEN" = "true" ]; then
+            echo "Authenticating with CLAUDE_CODE_OAUTH_TOKEN"
+          else
+            echo "::error::No credential for the review. Pass CLAUDE_CODE_OAUTH_TOKEN, or set anthropic_federation_rule_id and anthropic_organization_id. A public repository does not receive an org secret limited to private repositories."
+            exit 1
+          fi
 
       # Resolve the model from the label BEFORE waiting for CI, so a malformed label
       # fails in seconds instead of after a half-hour wait. The label name reaches this
@@ -383,7 +431,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }} # for the `gh pr comment` that publishes the review
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Federation when its IDs are set; the OAuth token otherwise, never both.
+          claude_code_oauth_token: ${{ inputs.anthropic_federation_rule_id == '' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          anthropic_federation_rule_id: ${{ inputs.anthropic_federation_rule_id }}
+          anthropic_organization_id: ${{ inputs.anthropic_organization_id }}
+          anthropic_service_account_id: ${{ inputs.anthropic_service_account_id }}
+          anthropic_workspace_id: ${{ inputs.anthropic_workspace_id }}
           use_sticky_comment: true
           show_full_output: ${{ steps.model.outputs.full_output }}
           # In prompt mode nothing is published unless the prompt says so AND the tool is
