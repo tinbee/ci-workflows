@@ -11,8 +11,12 @@
 #   - This file has to be on `main` with identical content for the Claude review to run.
 #     A PR that adds or edits it cannot review itself, and the job is GREEN when it
 #     refuses.
-#   - CLAUDE_CODE_OAUTH_TOKEN must reach this repository. It is public, and an org secret
-#     limited to private repositories does not.
+#   - The review authenticates by workload identity federation, not CLAUDE_CODE_OAUTH_TOKEN:
+#     this repository is public, its logs are readable by anyone, and an org secret
+#     limited to private repositories does not reach it anyway. The four IDs are
+#     repository variables (Settings -> Secrets and variables -> Actions -> Variables);
+#     they are not secrets. The federation rule matches only pull_request runs of
+#     claude-review.yml@refs/tags/v1 in this repository.
 name: review
 
 on:
@@ -44,9 +48,10 @@ jobs:
         permissions, interpolates untrusted input into a `run:` script, unpins an action
         from a commit SHA, or names a private repository. Renaming an inner job is a
         breaking change: consumers require the check by name.
-    # Explicit, not `inherit`: it works from every org, which is what consumers are told.
-    secrets:
-      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      anthropic_federation_rule_id: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}
+      anthropic_organization_id: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}
+      anthropic_service_account_id: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
+      anthropic_workspace_id: ${{ vars.ANTHROPIC_WORKSPACE_ID }}
 
   copilot-review:
     # Any label raises this event; skip the job for every other one.
