@@ -368,5 +368,7 @@ jobs:
           if [ -n "${SSH_AGENT_PID:-}" ]; then
             ssh-agent -k > /dev/null 2>&1 || kill "${SSH_AGENT_PID}" 2>/dev/null || true
           fi
-          git config --global --get-regexp '^url\.git@github\.com:.*\.insteadof$' 2>/dev/null \
+          # `--get-regexp` exits 1 when nothing matches (no private modules this run), and
+          # steps run under pipefail, so the listing itself must not fail the pipeline.
+          { git config --global --get-regexp '^url\.git@github\.com:.*\.insteadof$' 2>/dev/null || true; } \
             | while read -r key _; do git config --global --unset-all "$key" || true; done
