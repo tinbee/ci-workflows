@@ -6,7 +6,7 @@ Public so any org's repo can consume it. Reusable workflows in private repos can
 
 ## Where jobs run
 
-Every workflow here except `lint.yml` (this repo's own check) and the two deploy workflows picks its machine the same way:
+Every reusable workflow here except the two deploy workflows and `claude-review.yml` picks its machine the same way (`lint.yml` and `review.yml` are this repo's own checks, not reusable):
 
 ```yaml
 runs-on: ${{ inputs.runs_on || vars.CI_RUNS_ON || 'ubuntu-latest' }}
@@ -19,6 +19,8 @@ runs-on: ${{ inputs.runs_on || vars.CI_RUNS_ON || 'ubuntu-latest' }}
 A self-hosted runner must never serve a public repo: anyone's fork PR would run code on it. The runner groups only admit private repositories, and the variable's visibility keeps public callers from asking.
 
 **Deploys stay on GitHub's machines** (`deploy-s3-cloudfront`, `deploy-gh-pages`): they use `runs_on` only if a caller passes it, never `CI_RUNS_ON`. A deploy holds cloud credentials, and the self-hosted runner is long-lived and also runs CI, so code an earlier job left behind could read them. Deploys run only on merges and cost few minutes.
+
+**Claude reviews use their own variable, `CI_REVIEW_RUNS_ON`.** A review waits for its commit's CI inside the same job, so on a single runner it would hold the only slot while CI sat queued, time out, and skip the review with a green job. `tinbee/infra` sets `CI_REVIEW_RUNS_ON` only where the org has at least two runners.
 
 While the self-hosted runners are offline, jobs routed to them wait (GitHub queues them for up to 24 hours) instead of falling back. To fall back, remove the variable.
 

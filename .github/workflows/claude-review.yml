@@ -94,7 +94,7 @@ on:
   workflow_call:
     inputs:
       runs_on:
-        description: "The runner label the jobs run on. Empty (the default) means the caller's `CI_RUNS_ON` variable (an org variable, visible to private repos only, pointing them at Tin Bee's self-hosted runner), and when that is unset too, GitHub's `ubuntu-latest`. Public repos never see the variable, so they stay on GitHub's free runners."
+        description: "The runner label the jobs run on. Empty (the default) means the caller's `CI_REVIEW_RUNS_ON` variable (an org variable, visible to private repos only, set only where the org has two or more self-hosted runners), and when that is unset too, GitHub's `ubuntu-latest`. Public repos never see the variable, so they stay on GitHub's free runners."
         type: string
         required: false
         default: ""
@@ -218,7 +218,12 @@ jobs:
     # The job runs for every labelled PR so the label is always consumed -- a skipped job
     # would leave the label stuck on the PR, and a label that stays cannot be "added
     # again". Whether a review actually happens is decided per step below.
-    runs-on: ${{ inputs.runs_on || vars.CI_RUNS_ON || 'ubuntu-latest' }}
+    # Not CI_RUNS_ON: this job waits (up to ci_wait_attempts x 20s) for the same
+    # commit's CI, and with one self-hosted runner a waiting review would hold the
+    # only slot while CI sat queued, then time out and skip the review with a green
+    # job. CI_REVIEW_RUNS_ON is set only where the org has at least two runners
+    # (tinbee/infra github-runner-do).
+    runs-on: ${{ inputs.runs_on || vars.CI_REVIEW_RUNS_ON || 'ubuntu-latest' }}
     env:
       # `!= ''` first: startsWith(x, '') is true for every x, so an empty prefix would
       # turn EVERY label on the PR into a review request.
@@ -451,8 +456,10 @@ jobs:
           # fragile), so the tool that writes it must be allowed. Without it the model
           # got a denial on every attempt and whether the review was posted at all
           # depended on it improvising a fallback: 10 denials and a posted review one
-          # run, 13 denials and a sixteen-minute review discarded the next. The runner
-          # is disposable and nothing is pushed, so Write costs nothing here.
+          # run, 13 denials and a sixteen-minute review discarded the next. Nothing is
+          # pushed, so Write costs nothing on GitHub's runners, which are thrown away
+          # after the job. On a self-hosted runner (CI_REVIEW_RUNS_ON) the machine lives
+          # on, and its job-completed hook removes what a job leaves behind.
           claude_args: >-
             --model ${{ steps.model.outputs.model }} --effort ${{ steps.model.outputs.effort }} --max-turns ${{ inputs.max_turns }}
             --allowedTools "Read,Glob,Grep,Write,Bash(gh api:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),mcp__github_comment__update_claude_comment"
