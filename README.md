@@ -4,6 +4,22 @@ Reusable GitHub Actions workflows for `tinbee` and other repos. Single source of
 
 Public so any org's repo can consume it. Reusable workflows in private repos can only be called from the same org; making this public is the standard pattern for cross-org sharing.
 
+## Where jobs run
+
+Every workflow here except `lint.yml` (this repo's own check) picks its machine the same way:
+
+```yaml
+runs-on: ${{ inputs.runs_on || vars.CI_RUNS_ON || 'ubuntu-latest' }}
+```
+
+1. **`runs_on`**, an optional input on every workflow: a runner label, for one caller that needs a specific machine.
+2. **`CI_RUNS_ON`**, an organisation variable: in `tinbee` and `instastack` it names the org's self-hosted runner (`tinbee-linux`, `instastack-linux`; `tinbee/infra` → `terraform/github-runner-do`). It is visible to **private repositories only**, so moving every private repo is one setting, and deleting it moves them all back.
+3. Otherwise **`ubuntu-latest`**. Public repos never see the variable and stay on GitHub's runners, which are free for public repos.
+
+A self-hosted runner must never serve a public repo: anyone's fork PR would run code on it. The runner groups only admit private repositories, and the variable's visibility keeps public callers from asking.
+
+While the self-hosted runners are offline, jobs routed to them wait (GitHub queues them for up to 24 hours) instead of falling back. To fall back, remove the variable.
+
 ## Available workflows
 
 ### `deploy-s3-cloudfront.yml`

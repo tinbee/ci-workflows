@@ -22,6 +22,11 @@ name: Deploy to GitHub Pages (reusable)
 on:
   workflow_call:
     inputs:
+      runs_on:
+        description: "The runner label the jobs run on. Empty (the default) means the caller's `CI_RUNS_ON` variable (an org variable, visible to private repos only, pointing them at Tin Bee's self-hosted runner), and when that is unset too, GitHub's `ubuntu-latest`. Public repos never see the variable, so they stay on GitHub's free runners."
+        type: string
+        required: false
+        default: ""
       node_version:
         description: "Node version passed to actions/setup-node."
         type: string
@@ -47,7 +52,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on || vars.CI_RUNS_ON || 'ubuntu-latest' }}
     # `actions/configure-pages` (below) reads the repo's Pages site via the
     # API and needs pages: write — without it the build job fails with
     # "Get Pages site failed ... Resource not accessible by integration".
@@ -119,7 +124,7 @@ jobs:
 
   deploy:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on || vars.CI_RUNS_ON || 'ubuntu-latest' }}
     permissions:
       pages: write
       id-token: write
