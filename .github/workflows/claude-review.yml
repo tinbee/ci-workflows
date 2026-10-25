@@ -222,7 +222,7 @@ jobs:
     # commit's CI, and with one self-hosted runner a waiting review would hold the
     # only slot while CI sat queued, then time out and skip the review with a green
     # job. CI_REVIEW_RUNS_ON is set only where the org has at least two runners
-    # (tinbee/infra github-runner-do).
+    # (the org's runner configuration).
     runs-on: ${{ inputs.runs_on || vars.CI_REVIEW_RUNS_ON || 'ubuntu-latest' }}
     env:
       # `!= ''` first: startsWith(x, '') is true for every x, so an empty prefix would

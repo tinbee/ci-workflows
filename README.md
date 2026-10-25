@@ -13,14 +13,14 @@ runs-on: ${{ inputs.runs_on || vars.CI_RUNS_ON || 'ubuntu-latest' }}
 ```
 
 1. **`runs_on`**, an optional input on every workflow: a runner label, for one caller that needs a specific machine.
-2. **`CI_RUNS_ON`**, an organisation variable: in `tinbee` and `instastack` it names the org's self-hosted runner (`tinbee-linux`, `instastack-linux`; `tinbee/infra` → `terraform/github-runner-do`). It is visible to **private repositories only**, so moving every private repo is one setting, and deleting it moves them all back.
+2. **`CI_RUNS_ON`**, an organisation variable: in `tinbee` and `instastack` it names the org's self-hosted runner label. It is visible to **private repositories only**, so moving every private repo is one setting, and deleting it moves them all back.
 3. Otherwise **`ubuntu-latest`**. Public repos never see the variable and stay on GitHub's runners, which are free for public repos.
 
 A self-hosted runner must never serve a public repo: anyone's fork PR would run code on it. The runner groups only admit private repositories, and the variable's visibility keeps public callers from asking.
 
 **Deploys stay on GitHub's machines** (`deploy-s3-cloudfront`, `deploy-gh-pages`): they use `runs_on` only if a caller passes it, never `CI_RUNS_ON`. A deploy holds cloud credentials, and the self-hosted runner is long-lived and also runs CI, so code an earlier job left behind could read them. Deploys run only on merges and cost few minutes.
 
-**Claude reviews use their own variable, `CI_REVIEW_RUNS_ON`.** A review waits for its commit's CI inside the same job, so on a single runner it would hold the only slot while CI sat queued, time out, and skip the review with a green job. `tinbee/infra` sets `CI_REVIEW_RUNS_ON` only where the org has at least two runners.
+**Claude reviews use their own variable, `CI_REVIEW_RUNS_ON`.** A review waits for its commit's CI inside the same job, so on a single runner it would hold the only slot while CI sat queued, time out, and skip the review with a green job. The org's runner configuration sets `CI_REVIEW_RUNS_ON` only where the org has at least two runners.
 
 While the self-hosted runners are offline, jobs routed to them wait (GitHub queues them for up to 24 hours) instead of falling back. To fall back, remove the variable.
 
@@ -320,10 +320,11 @@ cannot see, and both read as "module not found" from whichever of `buf`, `sqlc`,
 `golangci-lint` or `go build` happens to fetch first.
 
 With both set, the job also gets its own module cache: `GOMODCACHE` points under
-`RUNNER_TEMP` and `-modcacherw` is added to `GOFLAGS`, and the last step deletes that cache
-along with the key and the rewrites. On a long-lived self-hosted runner a shared cache would
-keep the private source on disk for later jobs, and would let a repo without the key build
-from it and pass. setup-go's cache still restores into the per-job cache.
+`RUNNER_TEMP` and `-modcacherw` is added to `GOFLAGS`, so the cache is deleted
+with the rest of `RUNNER_TEMP` between jobs, after setup-go has saved it. On a
+long-lived self-hosted runner a shared cache would keep the private source on disk for later
+jobs, and would let a repo without the key build from it and pass. setup-go's cache restores
+into and saves from the per-job cache as usual.
 
 To set the credential up, on the repo that **holds** the modules:
 
