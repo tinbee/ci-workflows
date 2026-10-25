@@ -319,6 +319,12 @@ URL it cannot authenticate, a key alone leaves Go asking the public proxy for a 
 cannot see, and both read as "module not found" from whichever of `buf`, `sqlc`,
 `golangci-lint` or `go build` happens to fetch first.
 
+With both set, the job also gets its own module cache: `GOMODCACHE` points under
+`RUNNER_TEMP` and `-modcacherw` is added to `GOFLAGS`, and the last step deletes that cache
+along with the key and the rewrites. On a long-lived self-hosted runner a shared cache would
+keep the private source on disk for later jobs, and would let a repo without the key build
+from it and pass. setup-go's cache still restores into the per-job cache.
+
 To set the credential up, on the repo that **holds** the modules:
 
 ```bash

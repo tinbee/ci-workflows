@@ -202,7 +202,19 @@ jobs:
             exit 1
           fi
 
-          echo "GOPRIVATE=${GOPRIVATE_IN}" >> "$GITHUB_ENV"
+          # The private modules this key fetches land in the module cache, which on a
+          # long-lived self-hosted runner (CI_RUNS_ON) is in a home that outlives the job.
+          # Left there, any later job on that runner could read their source, and a repo
+          # that never got the key would build from the warm cache and pass, hiding the
+          # missing credential until it runs on a fresh machine. So the cache is per-job,
+          # under RUNNER_TEMP. -modcacherw because Go writes the cache read-only, and a
+          # read-only tree survives `rm -rf`, the runner's own temp cleanup included.
+          # setup-go's cache follows `go env GOMODCACHE`, so caching still works.
+          {
+            echo "GOPRIVATE=${GOPRIVATE_IN}"
+            echo "GOMODCACHE=${RUNNER_TEMP}/gomodcache"
+            echo "GOFLAGS=${GOFLAGS:+${GOFLAGS} }-modcacherw"
+          } >> "$GITHUB_ENV"
 
           # The agent's socket has to outlive this step, so its address goes into
           # $GITHUB_ENV. `ssh-add -` reads the key from stdin, so it is never written to
@@ -359,9 +371,10 @@ jobs:
 
       # Always, and last: what "Private Go modules" left behind. On GitHub's runners
       # the VM is thrown away after the job, but a self-hosted runner (CI_RUNS_ON) is
-      # long-lived, so a still-running agent holding the private-module key, or the
-      # global URL rewrites, would be there for the next job on that machine.
-      - name: Remove the private-module key and rewrites
+      # long-lived, so a still-running agent holding the private-module key, the global
+      # URL rewrites, or the per-job module cache holding the private source, would be
+      # there for the next job on that machine.
+      - name: Remove the private-module key, rewrites and module cache
         if: always()
         shell: bash
         run: |
@@ -372,3 +385,8 @@ jobs:
           # steps run under pipefail, so the listing itself must not fail the pipeline.
           { git config --global --get-regexp '^url\.git@github\.com:.*\.insteadof$' 2>/dev/null || true; } \
             | while read -r key _; do git config --global --unset-all "$key" || true; done
+          # Only the per-job cache "Private Go modules" set; never a cache it did not create.
+          if [ -n "${RUNNER_TEMP:-}" ] && [ "${GOMODCACHE:-}" = "${RUNNER_TEMP}/gomodcache" ]; then
+            chmod -R u+w "${GOMODCACHE}" 2>/dev/null || true
+            rm -rf "${GOMODCACHE}" || true
+          fi
