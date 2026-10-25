@@ -14,7 +14,7 @@ on:
   workflow_call:
     inputs:
       runs_on:
-        description: "The runner label the jobs run on. Empty (the default) means the caller's `CI_RUNS_ON` variable (an org variable, visible to private repos only, pointing them at Tin Bee's self-hosted runner), and when that is unset too, GitHub's `ubuntu-latest`. Public repos never see the variable, so they stay on GitHub's free runners."
+        description: "The runner label the jobs run on; empty (the default) means GitHub's `ubuntu-latest`. Deliberately NOT the org's `CI_RUNS_ON`: a deploy holds cloud credentials (OIDC), and the self-hosted runner is long-lived and also runs CI, so code left behind by an earlier job could read them. Deploys stay on GitHub's fresh machines unless a caller opts in."
         type: string
         required: false
         default: ""
@@ -75,7 +75,7 @@ on:
 
 jobs:
   deploy:
-    runs-on: ${{ inputs.runs_on || vars.CI_RUNS_ON || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.runs_on || 'ubuntu-latest' }}
     permissions:
       id-token: write
       contents: read
