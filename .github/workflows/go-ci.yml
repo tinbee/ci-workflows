@@ -35,7 +35,7 @@ on:
   workflow_call:
     inputs:
       runs_on:
-        description: "The runner label the jobs run on. Empty (the default) means the caller's `CI_RUNS_ON` variable (an org variable, visible to private repos only, pointing them at Tin Bee's self-hosted runner), and when that is unset too, GitHub's `ubuntu-latest`. Public repos never see the variable, so they stay on GitHub's free runners."
+        description: "The runner label the jobs run on. Empty (the default) means the caller's `CI_RUNS_ON` variable (an org variable, visible to private repos only, pointing them at Tin Bee's self-hosted runner), and when that is unset too, GitHub's `ubuntu-latest`. Public repos never see the variable, so they stay on GitHub's free runners. A job with `goprivate` set ignores `CI_RUNS_ON`: it holds the private-module deploy key, so it reaches a self-hosted runner only when the caller names one here."
         type: string
         required: false
         default: ""
@@ -147,7 +147,13 @@ on:
 jobs:
   CI:
     name: CI
-    runs-on: ${{ inputs.runs_on || vars.CI_RUNS_ON || 'ubuntu-latest' }}
+    # A job with private modules holds the deploy key, so CI_RUNS_ON does not move it:
+    # on a long-lived self-hosted runner that also runs every other private repo's CI,
+    # something an earlier job left behind (a global core.sshCommand, a process started
+    # with sudo) could use the key through this job's ssh-agent -- the reason deploys
+    # stay off it. A caller can still opt in by passing runs_on. goprivate is the
+    # signal because the key is refused without it.
+    runs-on: ${{ inputs.runs_on || (inputs.goprivate == '' && vars.CI_RUNS_ON) || 'ubuntu-latest' }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
     # Declared here because a reusable workflow otherwise inherits the CALLING repo's
     # default token, which is read-write wherever that repo has not tightened it. Nothing
