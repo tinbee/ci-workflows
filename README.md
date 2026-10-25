@@ -20,7 +20,7 @@ A self-hosted runner must never serve a public repo: anyone's fork PR would run 
 
 **Deploys stay on GitHub's machines** (`deploy-s3-cloudfront`, `deploy-gh-pages`): they use `runs_on` only if a caller passes it, never `CI_RUNS_ON`. A deploy holds cloud credentials, and the self-hosted runner is long-lived and also runs CI, so code an earlier job left behind could read them. Deploys run only on merges and cost few minutes.
 
-**Claude reviews use their own variable, `CI_REVIEW_RUNS_ON`.** A review waits for its commit's CI inside the same job, so on a single runner it would hold the only slot while CI sat queued, time out, and skip the review with a green job. The org's runner configuration sets `CI_REVIEW_RUNS_ON` only where the org has at least two runners.
+**Claude reviews stay on GitHub's machines too** (`claude-review`): `runs_on` only if a caller passes it, never `CI_RUNS_ON`. For the same reason as deploys: a review holds the Claude token and a token that can write to the PR. Reviews are a small share of the minutes, and on a single self-hosted runner a review would deadlock anyway, waiting for its own commit's CI while holding the only slot.
 
 While the self-hosted runners are offline, jobs routed to them wait (GitHub queues them for up to 24 hours) instead of falling back. To fall back, remove the variable.
 
