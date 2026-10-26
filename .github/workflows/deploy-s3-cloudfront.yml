@@ -14,7 +14,7 @@ on:
   workflow_call:
     inputs:
       runs_on:
-        description: "The runner label the jobs run on; empty (the default) means GitHub's `ubuntu-latest`. Deliberately NOT the org's `CI_RUNS_ON`: a deploy holds cloud credentials (OIDC), and the self-hosted runner is long-lived and also runs CI, so code left behind by an earlier job could read them. Deploys stay on GitHub's fresh machines unless a caller opts in."
+        description: "The runner label the jobs run on; empty (the default) means GitHub's `ubuntu-latest`. Deliberately NOT the org's `CI_RUNS_ON`: a deploy holds cloud credentials (OIDC) and costs few minutes, so it stays on GitHub's machines unless a caller opts in."
         type: string
         required: false
         default: ""

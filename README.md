@@ -18,11 +18,9 @@ runs-on: ${{ inputs.runs_on || vars.CI_RUNS_ON || 'ubuntu-latest' }}
 
 A self-hosted runner must never serve a public repo: anyone's fork PR would run code on it. The runner groups only admit private repositories, and the variable's visibility keeps public callers from asking.
 
-**Deploys stay on GitHub's machines** (`deploy-s3-cloudfront`, `deploy-gh-pages`): they use `runs_on` only if a caller passes it, never `CI_RUNS_ON`. A deploy holds cloud credentials, and the self-hosted runner is long-lived and also runs CI, so code an earlier job left behind could read them. Deploys run only on merges and cost few minutes.
+**`CI_RUNS_ON` may only name runners that give every job a fresh machine** and keep nothing between jobs. CI jobs hold credentials (`GITHUB_TOKEN`, the Turbo token, the private-module deploy key, whatever a caller passes in `env_json`), so on a runner reused between jobs, something an earlier job left behind could read them. That cannot be fixed job by job, so these workflows do not try: the rule is on the runner. A shared, long-lived runner was tried and dropped for this reason.
 
-**Go CI with private modules stays on GitHub's machines too**, unless the caller passes `runs_on`: a `go-ci` job with `goprivate` set ignores `CI_RUNS_ON`. It holds the private-module deploy key, and on a shared long-lived runner something an earlier job left behind could use it. Passing `runs_on` (the org's runner label) is an explicit choice to accept that.
-
-**Claude reviews stay on GitHub's machines too** (`claude-review`): `runs_on` only if a caller passes it, never `CI_RUNS_ON`. For the same reason as deploys: a review holds the Claude token and a token that can write to the PR. Reviews are a small share of the minutes, and on a single self-hosted runner a review would deadlock anyway, waiting for its own commit's CI while holding the only slot.
+**Deploys and Claude reviews stay on GitHub's machines** (`deploy-s3-cloudfront`, `deploy-gh-pages`, `claude-review`): they use `runs_on` only if a caller passes it, never `CI_RUNS_ON`. They hold the most powerful credentials (cloud access; the Claude token and a token that can write to the PR) and are a small share of the minutes. A review would also deadlock on a single runner, waiting for its own commit's CI while holding the only slot.
 
 While the self-hosted runners are offline, jobs routed to them wait (GitHub queues them for up to 24 hours) instead of falling back. To fall back, remove the variable.
 
@@ -323,9 +321,9 @@ cannot see, and both read as "module not found" from whichever of `buf`, `sqlc`,
 
 With both set, the job also gets its own module cache: `GOMODCACHE` points under
 `RUNNER_TEMP` and `-modcacherw` is added to `GOFLAGS`, so the cache is deleted
-with the rest of `RUNNER_TEMP` between jobs, after setup-go has saved it. On a
-long-lived self-hosted runner a shared cache would keep the private source on disk for later
-jobs, and would let a repo without the key build from it and pass. setup-go's cache restores
+with the rest of `RUNNER_TEMP` between jobs, after setup-go has saved it. On a runner a
+caller names with `runs_on` that is reused between jobs, a shared cache would keep the private
+source on disk for later jobs, and would let a repo without the key build from it and pass. setup-go's cache restores
 into and saves from the per-job cache as usual.
 
 To set the credential up, on the repo that **holds** the modules:
