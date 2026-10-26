@@ -18,7 +18,7 @@ runs-on: ${{ inputs.runs_on || vars.CI_RUNS_ON || 'ubuntu-latest' }}
 
 A self-hosted runner must never serve a public repo: anyone's fork PR would run code on it. The runner groups only admit private repositories, and the variable's visibility keeps public callers from asking.
 
-**`CI_RUNS_ON` may only name runners that give every job a fresh machine** and keep nothing between jobs. CI jobs hold credentials (`GITHUB_TOKEN`, the Turbo token, the private-module deploy key, whatever a caller passes in `env_json`), so on a runner reused between jobs, something an earlier job left behind could read them. That cannot be fixed job by job, so these workflows do not try: the rule is on the runner. A shared, long-lived runner was tried and dropped for this reason.
+**Every runner these workflows run on must give each job a fresh machine** and keep nothing between jobs, whether it is named by `CI_RUNS_ON` or by a caller's `runs_on`. CI jobs hold credentials (`GITHUB_TOKEN`, the Turbo token, the private-module deploy key, whatever a caller passes in `env_json`), and `claude-review` gives the model a file-write tool while it reads untrusted PR content; on a runner reused between jobs, something an earlier job left behind could reach the next job's secrets. That cannot be fixed job by job, so these workflows do not try: the rule is on the runner. A shared, long-lived runner was tried and dropped for this reason.
 
 **Deploys and Claude reviews stay on GitHub's machines** (`deploy-s3-cloudfront`, `deploy-gh-pages`, `claude-review`): they use `runs_on` only if a caller passes it, never `CI_RUNS_ON`. They hold the most powerful credentials (cloud access; the Claude token and a token that can write to the PR) and are a small share of the minutes. A review would also deadlock on a single runner, waiting for its own commit's CI while holding the only slot.
 
@@ -318,13 +318,6 @@ half-configured fails later and elsewhere: `goprivate` alone makes Go fetch dire
 URL it cannot authenticate, a key alone leaves Go asking the public proxy for a module it
 cannot see, and both read as "module not found" from whichever of `buf`, `sqlc`,
 `golangci-lint` or `go build` happens to fetch first.
-
-With both set, the job also gets its own module cache: `GOMODCACHE` points under
-`RUNNER_TEMP` and `-modcacherw` is added to `GOFLAGS`, so the cache is deleted
-with the rest of `RUNNER_TEMP` between jobs, after setup-go has saved it. On a runner a
-caller names with `runs_on` that is reused between jobs, a shared cache would keep the private
-source on disk for later jobs, and would let a repo without the key build from it and pass. setup-go's cache restores
-into and saves from the per-job cache as usual.
 
 To set the credential up, on the repo that **holds** the modules:
 

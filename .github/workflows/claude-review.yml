@@ -94,7 +94,7 @@ on:
   workflow_call:
     inputs:
       runs_on:
-        description: "The runner label the job runs on. Empty (the default) means GitHub's `ubuntu-latest`. The org-wide `CI_RUNS_ON` is deliberately NOT read: see the comment on the job."
+        description: "The runner label the job runs on. Empty (the default) means GitHub's `ubuntu-latest`. The org-wide `CI_RUNS_ON` is deliberately NOT read: see the comment on the job. Must name a runner that gives every job a fresh machine: the model has a file-write tool while it reads untrusted PR content (README, \"Where jobs run\")."
         type: string
         required: false
         default: ""
@@ -456,9 +456,9 @@ jobs:
           # fragile), so the tool that writes it must be allowed. Without it the model
           # got a denial on every attempt and whether the review was posted at all
           # depended on it improvising a fallback: 10 denials and a posted review one
-          # run, 13 denials and a sixteen-minute review discarded the next. Nothing is
-          # pushed, so Write costs nothing on GitHub's runners, which are thrown away
-          # after the job.
+          # run, 13 denials and a sixteen-minute review discarded the next. The runner
+          # is disposable (a fresh machine per job, whatever runs_on names) and nothing is
+          # pushed, so Write costs nothing here.
           claude_args: >-
             --model ${{ steps.model.outputs.model }} --effort ${{ steps.model.outputs.effort }} --max-turns ${{ inputs.max_turns }}
             --allowedTools "Read,Glob,Grep,Write,Bash(gh api:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),mcp__github_comment__update_claude_comment"

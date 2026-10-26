@@ -202,20 +202,7 @@ jobs:
             exit 1
           fi
 
-          # The private modules this key fetches land in the module cache, which on a
-          # runner reused between jobs (one a caller names with runs_on) outlives the job.
-          # Left there, any later job on that runner could read their source, and a repo
-          # that never got the key would build from the warm cache and pass, hiding the
-          # missing credential until it runs on a fresh machine. So the cache is per-job,
-          # under RUNNER_TEMP, which is emptied between jobs -- never before this job's
-          # post steps, so setup-go's post step still saves it. -modcacherw because Go
-          # writes the cache read-only, and a read-only tree survives that cleanup (it
-          # survives a plain `rm -rf`). setup-go restores and saves via `go env GOMODCACHE`.
-          {
-            echo "GOPRIVATE=${GOPRIVATE_IN}"
-            echo "GOMODCACHE=${RUNNER_TEMP}/gomodcache"
-            echo "GOFLAGS=${GOFLAGS:+${GOFLAGS} }-modcacherw"
-          } >> "$GITHUB_ENV"
+          echo "GOPRIVATE=${GOPRIVATE_IN}" >> "$GITHUB_ENV"
 
           # The agent's socket has to outlive this step, so its address goes into
           # $GITHUB_ENV. `ssh-add -` reads the key from stdin, so it is never written to
@@ -369,24 +356,3 @@ jobs:
         if: inputs.post_command != ''
         working-directory: ${{ inputs.working_directory }}
         run: ${{ inputs.post_command }}
-
-      # Always, and last: what "Private Go modules" left behind. On GitHub's runners
-      # the VM is thrown away after the job, but on a runner reused between jobs (one a
-      # caller names with runs_on) a still-running agent holding the private-module key,
-      # or the global URL rewrites, would be there for the next job on that machine. The
-      # per-job module cache is NOT removed here: setup-go saves it in a post step,
-      # which runs after this one, so it goes with RUNNER_TEMP between jobs.
-      - name: Remove the private-module key and rewrites
-        # Only in a job that set them up: the rewrites are in the runner user's GLOBAL
-        # git config, so an unscoped step would also delete rewrites another job on the
-        # same host (or the runner's admin) put there.
-        if: always() && inputs.goprivate != ''
-        shell: bash
-        run: |
-          if [ -n "${SSH_AGENT_PID:-}" ]; then
-            ssh-agent -k > /dev/null 2>&1 || kill "${SSH_AGENT_PID}" 2>/dev/null || true
-          fi
-          # `--get-regexp` exits 1 when nothing matches (no private modules this run), and
-          # steps run under pipefail, so the listing itself must not fail the pipeline.
-          { git config --global --get-regexp '^url\.git@github\.com:.*\.insteadof$' 2>/dev/null || true; } \
-            | while read -r key _; do git config --global --unset-all "$key" || true; done
