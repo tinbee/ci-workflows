@@ -289,7 +289,7 @@ jobs:
 | `gofmt_check`       | `true`                | Fails when `gofmt -l` names a file.                                                                                                                                                                                           |
 | `timeout_minutes`   | `20`                  |                                                                                                                                                                                                                               |
 | `env_json`          | `{}`                  | Extra env for every step.                                                                                                                                                                                                     |
-| `goprivate`         | `""`                  | Comma-separated module-path globs to fetch direct rather than through `proxy.golang.org`, e.g. `github.com/tinbee/*`. Required for any private module. Pair with the `private_module_ssh_key` secret — each is useless alone. |
+| `goprivate`         | `""`                  | Comma-separated module-path globs to fetch direct rather than through `proxy.golang.org`, e.g. `github.com/tinbee/*`. Required for any private module. Pair with the `private_module_ssh_key` secret — each is useless alone. Setting it also turns off the Actions cache, which would otherwise hold the private modules' source. |
 
 #### Secrets
 
