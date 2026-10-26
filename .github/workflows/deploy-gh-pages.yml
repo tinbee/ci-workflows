@@ -22,6 +22,11 @@ name: Deploy to GitHub Pages (reusable)
 on:
   workflow_call:
     inputs:
+      runs_on:
+        description: "The runner label the jobs run on; empty (the default) means GitHub's `ubuntu-latest`. Deliberately NOT the org's `CI_RUNS_ON`: a deploy holds cloud credentials (OIDC) and costs few minutes, so it stays on GitHub's machines unless a caller opts in."
+        type: string
+        required: false
+        default: ""
       node_version:
         description: "Node version passed to actions/setup-node."
         type: string
@@ -47,7 +52,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on || 'ubuntu-latest' }}
     # `actions/configure-pages` (below) reads the repo's Pages site via the
     # API and needs pages: write — without it the build job fails with
     # "Get Pages site failed ... Resource not accessible by integration".
@@ -119,7 +124,7 @@ jobs:
 
   deploy:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on || 'ubuntu-latest' }}
     permissions:
       pages: write
       id-token: write

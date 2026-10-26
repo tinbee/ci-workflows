@@ -4,6 +4,26 @@ Reusable GitHub Actions workflows for `tinbee` and other repos. Single source of
 
 Public so any org's repo can consume it. Reusable workflows in private repos can only be called from the same org; making this public is the standard pattern for cross-org sharing.
 
+## Where jobs run
+
+Every reusable workflow here except the two deploy workflows and `claude-review.yml` picks its machine the same way (`lint.yml` and `review.yml` are this repo's own checks, not reusable):
+
+```yaml
+runs-on: ${{ inputs.runs_on || vars.CI_RUNS_ON || 'ubuntu-latest' }}
+```
+
+1. **`runs_on`**, an optional input on every workflow: a runner label, for one caller that needs a specific machine.
+2. **`CI_RUNS_ON`**, an organisation variable: in `tinbee` and `instastack` it names the org's self-hosted runner label. It is visible to **private repositories only**, so moving every private repo is one setting, and deleting it moves them all back.
+3. Otherwise **`ubuntu-latest`**. Public repos never see the variable and stay on GitHub's runners, which are free for public repos.
+
+A self-hosted runner must never serve a public repo: anyone's fork PR would run code on it. The runner groups only admit private repositories, and the variable's visibility keeps public callers from asking.
+
+**Every runner these workflows run on must give each job a fresh machine** and keep nothing between jobs, whether it is named by `CI_RUNS_ON` or by a caller's `runs_on`. CI jobs hold credentials (`GITHUB_TOKEN`, the Turbo token, the private-module deploy key, whatever a caller passes in `env_json`), and `claude-review` gives the model a file-write tool while it reads untrusted PR content; on a runner reused between jobs, something an earlier job left behind could reach the next job's secrets. That cannot be fixed job by job, so these workflows do not try: the rule is on the runner. A shared, long-lived runner was tried and dropped for this reason.
+
+**Deploys and Claude reviews stay on GitHub's machines** (`deploy-s3-cloudfront`, `deploy-gh-pages`, `claude-review`): they use `runs_on` only if a caller passes it, never `CI_RUNS_ON`. They hold the most powerful credentials (cloud access; the Claude token and a token that can write to the PR) and are a small share of the minutes. A review would also deadlock on a single runner, waiting for its own commit's CI while holding the only slot.
+
+While the self-hosted runners are offline, jobs routed to them wait (GitHub queues them for up to 24 hours) instead of falling back. To fall back, remove the variable.
+
 ## Available workflows
 
 ### `deploy-s3-cloudfront.yml`
