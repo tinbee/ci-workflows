@@ -272,9 +272,17 @@ jobs:
         if: inputs.pre_command != ''
         run: ${{ inputs.pre_command }}
 
+      # No Actions cache when goprivate is set. setup-go's cache holds the module cache
+      # (the private modules' SOURCE) and the build cache compiled from it, and a cache
+      # can be restored by any workflow run in the repo -- including a pull request from
+      # a fork on a public caller, and people who can push to the caller but cannot read
+      # the private repo. Three steps cache, and all three are switched off together:
+      # this one, the setup-go inside govulncheck-action, and golangci-lint's own cache.
+      # The cost is a cold module download on each run, for repos with private modules.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: ${{ inputs.working_directory }}/${{ inputs.go_version_file }}
+          cache: ${{ inputs.goprivate == '' }}
           cache-dependency-path: ${{ inputs.working_directory }}/go.sum
 
       - uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0
@@ -314,6 +322,8 @@ jobs:
         with:
           version: ${{ inputs.golangci_version }}
           working-directory: ${{ inputs.working_directory }}
+          # See setup-go: no Actions cache with private modules.
+          skip-cache: ${{ inputs.goprivate != '' }}
 
       - name: gofmt
         if: inputs.gofmt_check
@@ -351,6 +361,8 @@ jobs:
           go-version-file: ${{ inputs.working_directory }}/${{ inputs.go_version_file }}
           go-package: ./...
           work-dir: ${{ inputs.working_directory }}
+          # See setup-go: no Actions cache with private modules.
+          cache: ${{ inputs.goprivate == '' }}
 
       - name: Post-command
         if: inputs.post_command != ''
