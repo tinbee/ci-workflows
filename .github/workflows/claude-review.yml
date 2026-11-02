@@ -439,7 +439,7 @@ jobs:
 
       - name: Review
         if: env.ELIGIBLE == 'true' && steps.ci.outputs.result == 'success'
-        uses: anthropics/claude-code-action@ae68417a745a5df4b2124873632bd73a2255e6f6 # v1
+        uses: anthropics/claude-code-action@6d5ae526d25ce88daa2200be073e1a373167f064 # v1
         env:
           GH_TOKEN: ${{ github.token }} # for the `gh pr comment` that publishes the review
         with:
