@@ -461,7 +461,7 @@ to the version on the repository's default branch` — when the PR's copy of the
 | `project_context`    | `""`                          | One or two sentences on what the service is and what language. Without it the model infers the domain from the diff.                                                                                                                                                                                           |
 | `project_rules`      | `docs/review-rules/README.md` | The caller's own invariants. Skipped when absent.                                                                                                                                                                                                                                                              |
 | `rules_ref`          | `v1`                          | Ref of this repo the shared `review-rules/` come from.                                                                                                                                                                                                                                                         |
-| `model`              | `claude-sonnet-5-5`           | Default model; a model label overrides it per PR. Sonnet 5.5, changed from `claude-opus-5` in v1.15.0.                                                                                                                                                                                                         |
+| `model`              | `opus`                        | Default model: the alias for the latest Opus, so the single `claude-review` label means Opus. A model label overrides it per PR. Was `claude-sonnet-5-5` (and `claude-opus-5` before v1.15.0).                                                                                                                 |
 | `effort`             | `high`                        | Default `--effort`: `low`, `medium`, `high`, `xhigh` or `max`; a model label can override it.                                                                                                                                                                                                                  |
 | `max_turns`          | `200`                         | A runaway guard, not a budget: the action fails a run that finishes past the cap after the review is already posted and paid for.                                                                                                                                                                              |
 | `ci_wait_attempts`   | `90`                          | 20s each, so 30 minutes.                                                                                                                                                                                                                                                                                       |
@@ -469,22 +469,27 @@ to the version on the repository's default branch` — when the PR's copy of the
 
 #### Choosing a model
 
-`claude-review` reviews with the `model` and `effort` inputs. A label named
-`claude-review:<model>[:<effort>]` reviews that one PR with that model instead:
+There is **one label, `claude-review`, and it reviews with Opus** (the `model` default).
+Every inline finding on a PR therefore came from the same model, which is what lets a count
+of unresolved threads mean "findings nobody has answered". The label is orange (`F97316`),
+and `rulesets/apply.sh labels` creates and keeps it; it also renames the retired
+`claude-review:opus` onto it and deletes the old yellow `claude-review`
+(`FBC817`, which used the sonnet default).
+
+A label named `claude-review:<model>[:<effort>]` still reviews that one PR with that model
+instead. It is an override a repo creates on purpose, not part of the standard:
 
 | Label                               | Reviews with                     |
 | ----------------------------------- | -------------------------------- |
-| `claude-review`                     | the `model` / `effort` inputs    |
-| `claude-review:opus`                | `--model opus`, default effort   |
-| `claude-review:claude-opus-5-5:max` | `--model claude-opus-5-5`, `max` |
+| `claude-review`                     | Opus (the `model` / `effort` inputs) |
 | `claude-review:sonnet:xhigh`        | `--model sonnet`, `xhigh`        |
+| `claude-review:claude-opus-5-5:max` | `--model claude-opus-5-5`, `max` |
 
 The model goes to the CLI **as written**: an alias (`opus`, `sonnet`) or a full model id, with
 the CLI's optional context suffix (`opus[1m]`). There is no mapping and no allow-list in the
 workflow, so a model released tomorrow works as soon as the CLI accepts its id — create the
-label and nothing else changes. Labels are per repository; create one with
-`gh label create "claude-review:opus" --color F97316`. Model labels are orange (`F97316`) so
-they read apart from the yellow `claude-review` (`FBC817`) on a PR.
+label and nothing else changes. Labels are per repository; the standard one is created with
+`./rulesets/apply.sh labels OWNER/REPO`, not by hand.
 
 - A label that does not parse (`claude-review:`, an effort that is not one of the five) fails
   the job in seconds, before the CI wait, with the accepted forms in the error.
@@ -553,7 +558,7 @@ new review arriving is the only confirmation.
 
 ## Rulesets
 
-`rulesets/` holds the standard GitHub settings for a repo, split into four groups. One
+`rulesets/` holds the standard GitHub settings for a repo, split into five groups. One
 definition of each instead of one per repo.
 
 | Group             | File                   | What it enforces                                     | Applies to        |
@@ -562,11 +567,13 @@ definition of each instead of one per repo.
 | `pr-flow`         | `pr-flow.json`         | PR required, stale reviews dismissed, threads resolved | every repo      |
 | `required-checks` | `required-checks.json` | the named checks pass, on an up-to-date branch       | repos that run CI |
 | `repo-settings`   | `repo-settings.json`   | wiki off, projects off, delete branch on merge       | every repo        |
+| `labels`          | `labels.json`          | `claude-review` exists and is orange; `claude-review:opus` renamed onto it | every repo |
 
 The first three are **separate rulesets** on the repo, and GitHub adds rulesets together.
 That is what lets a repo with no CI take the first two and skip the third, and it means
 correcting one repo's check list is a write that cannot touch its PR rules.
-`repo-settings` is not a ruleset: it is three plain repository settings.
+`repo-settings` and `labels` are not rulesets: three plain repository settings, and the
+review label (created, recoloured, or renamed from a retired name).
 
 None of them has a bypass actor, and none has a `copilot_code_review` rule: Copilot
 reviews on request, by label, through `copilot-review.yml`.
@@ -589,6 +596,7 @@ git clone https://github.com/tinbee/ci-workflows && cd ci-workflows
 ./rulesets/apply.sh branch-safety OWNER/REPO
 ./rulesets/apply.sh pr-flow OWNER/REPO
 ./rulesets/apply.sh repo-settings OWNER/REPO
+./rulesets/apply.sh labels OWNER/REPO
 ```
 
 **Required checks go on the command line**, and are the only thing a repo is expected to

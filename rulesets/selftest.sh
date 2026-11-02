@@ -28,7 +28,7 @@ mkdir -p "$WORK/bin"
 # --- the fake -----------------------------------------------------------------------
 # Understands exactly the calls apply.sh makes:
 #   gh api <path> [-X METHOD] [--input -] [--jq EXPR]
-# State lives under $FAKE_STATE: rulesets/<id>.json and repo.json. Every call is logged
+# State lives under $FAKE_STATE: rulesets/<id>.json, repo.json and labels.json. Every call is logged
 # to calls.log as "METHOD path", which is how a test asserts that --check wrote nothing.
 cat >"$WORK/bin/gh" <<'FAKE'
 #!/usr/bin/env bash
@@ -42,6 +42,7 @@ while [ $# -gt 0 ]; do
     -X) method="$2"; shift ;;
     --input) body=$(cat); shift ;;
     --jq) jqexpr="$2"; shift ;;
+    --paginate) ;;
     *) echo "fake gh: unexpected argument $1" >&2; exit 2 ;;
   esac
   shift
@@ -70,6 +71,30 @@ case "$method $path" in
     printf '%s' "$stored" | emit ;;
   "DELETE repos/"*/rulesets/*)
     rm "$rs/${path##*/}.json" ;;
+  "GET repos/"*/labels)
+    emit <"$FAKE_STATE/labels.json" ;;
+  "POST repos/"*/labels)
+    if [ -z "${FAKE_IGNORE_WRITES:-}" ]; then
+      jq --argjson b "$body" '. + [$b]' "$FAKE_STATE/labels.json" >"$FAKE_STATE/labels.t" &&
+        mv "$FAKE_STATE/labels.t" "$FAKE_STATE/labels.json"
+    fi
+    printf '%s' "$body" | emit ;;
+  "PATCH repos/"*/labels/*)
+    name=$(printf '%b' "$(printf '%s' "${path##*/}" | sed 's/%/\\x/g')")
+    if [ -z "${FAKE_IGNORE_WRITES:-}" ]; then
+      jq --arg n "$name" --argjson b "$body" '
+        map(if .name == $n
+            then . + ($b | if has("new_name") then (.name = .new_name | del(.new_name)) else . end)
+            else . end)' "$FAKE_STATE/labels.json" >"$FAKE_STATE/labels.t" &&
+        mv "$FAKE_STATE/labels.t" "$FAKE_STATE/labels.json"
+    fi
+    printf '%s' "$body" | emit ;;
+  "DELETE repos/"*/labels/*)
+    name=$(printf '%b' "$(printf '%s' "${path##*/}" | sed 's/%/\\x/g')")
+    if [ -z "${FAKE_IGNORE_WRITES:-}" ]; then
+      jq --arg n "$name" 'map(select(.name != $n))' "$FAKE_STATE/labels.json" >"$FAKE_STATE/labels.t" &&
+        mv "$FAKE_STATE/labels.t" "$FAKE_STATE/labels.json"
+    fi ;;
   "GET repos/"*)
     emit <"$FAKE_STATE/repo.json" ;;
   "PATCH repos/"*)
@@ -88,6 +113,7 @@ reset_state() {
   rm -rf "$FAKE_STATE"
   mkdir -p "$FAKE_STATE/rulesets"
   echo 100 >"$FAKE_STATE/next_id"
+  echo '[]' >"$FAKE_STATE/labels.json"
   : >"$FAKE_STATE/calls.log"
   echo '{"name":"demo","has_wiki":true,"has_projects":true,"delete_branch_on_merge":false,"has_issues":true}' \
     >"$FAKE_STATE/repo.json"
@@ -255,6 +281,77 @@ is "settings it owns are set" \
   "$(jq -c '{has_wiki, has_projects, delete_branch_on_merge}' "$FAKE_STATE/repo.json")" \
   '{"has_wiki":false,"has_projects":false,"delete_branch_on_merge":true}'
 is "a setting it does not list is untouched" "$(jq -r .has_issues "$FAKE_STATE/repo.json")" "true"
+
+# --- 9. labels -----------------------------------------------------------------------
+label_names() { jq -c 'map(.name) | sort' "$FAKE_STATE/labels.json"; }
+label() { jq -c --arg n "$1" '.[] | select(.name == $n) | {color, description}' "$FAKE_STATE/labels.json"; }
+add_label() { # add_label <name> <color> <description>
+  jq --arg n "$1" --arg c "$2" --arg d "$3" '. + [{name: $n, color: $c, description: $d}]' \
+    "$FAKE_STATE/labels.json" >"$FAKE_STATE/labels.t" && mv "$FAKE_STATE/labels.t" "$FAKE_STATE/labels.json"
+}
+WANT_DESC=$(jq -r '.labels["claude-review"].description' "$HERE/labels.json")
+
+reset_state
+expect 1 "check labels on a repo with none" --check labels "$REPO"
+is "--check labels made no writes" "$(writes)" "0"
+expect 0 "apply creates the label" labels "$REPO"
+is "created: just claude-review" "$(label_names)" '["claude-review"]'
+is "created: orange and described" "$(label claude-review)" \
+  "$(jq -c -n --arg d "$WANT_DESC" '{color: "f97316", description: $d}')"
+expect 0 "check labels after apply" --check labels "$REPO"
+expect 0 "re-applying a clean repo" labels "$REPO"
+
+# The live fleet: the old yellow claude-review AND claude-review:opus. One label must remain,
+# the orange one, and a label that is not ours must be left alone.
+reset_state
+add_label claude-review fbc817 "Run the cold-context Claude review on this PR"
+add_label claude-review:opus f97316 "Cold-context Claude review using Opus"
+add_label bug d73a4a "Something is not working"
+expect 1 "check sees the retired label" --check labels "$REPO"
+is "the diagnosis names the retired label" \
+  "$(grep -c 'retired, still present: claude-review:opus' "$WORK/out" || true)" "1"
+expect 0 "apply migrates both labels to one" labels "$REPO"
+is "after migrate: claude-review and the untouched bug label" "$(label_names)" '["bug","claude-review"]'
+is "after migrate: claude-review carries the orange/Opus description" "$(label claude-review)" \
+  "$(jq -c -n --arg d "$WANT_DESC" '{color: "f97316", description: $d}')"
+is "the unrelated label is untouched" "$(label bug)" '{"color":"d73a4a","description":"Something is not working"}'
+expect 0 "check labels after migrate" --check labels "$REPO"
+is "the yellow label was deleted before the rename" \
+  "$(grep -c '^DELETE repos/acme/demo/labels/claude-review$' "$FAKE_STATE/calls.log" || true)" "1"
+
+# Only the retired label exists: it is renamed, not recreated.
+reset_state
+add_label claude-review:opus f97316 "Cold-context Claude review using Opus"
+expect 0 "apply renames a lone retired label" labels "$REPO"
+is "renamed in place" "$(label_names)" '["claude-review"]'
+is "no create call was needed" "$(grep -c '^POST repos/acme/demo/labels$' "$FAKE_STATE/calls.log" || true)" "0"
+
+# Only the old yellow label: recoloured and redescribed, never deleted.
+reset_state
+add_label claude-review fbc817 "Run the cold-context Claude review on this PR"
+expect 1 "check sees the wrong colour" --check labels "$REPO"
+expect 0 "apply recolours it" labels "$REPO"
+is "recoloured" "$(jq -r '.[0].color' "$FAKE_STATE/labels.json")" "f97316"
+is "nothing deleted" "$(grep -c '^DELETE ' "$FAKE_STATE/calls.log" || true)" "0"
+
+# Injected drift on a clean repo, one field at a time.
+reset_state
+labels_clean() { reset_state; "$APPLY" labels "$REPO" >/dev/null; }
+labels_clean
+jq 'map(.color = "fbc817")' "$FAKE_STATE/labels.json" >"$FAKE_STATE/l.t" && mv "$FAKE_STATE/l.t" "$FAKE_STATE/labels.json"
+expect 1 "check sees a wrong colour" --check labels "$REPO"
+labels_clean
+jq 'map(.description = "edited by hand")' "$FAKE_STATE/labels.json" >"$FAKE_STATE/l.t" && mv "$FAKE_STATE/l.t" "$FAKE_STATE/labels.json"
+expect 1 "check sees a wrong description" --check labels "$REPO"
+labels_clean
+add_label claude-review:opus f97316 "back again"
+expect 1 "check sees a retired label come back" --check labels "$REPO"
+
+# If the writes do not land, apply must not report success.
+reset_state
+export FAKE_IGNORE_WRITES=1
+expect 1 "apply labels fails when GitHub does not hold the write" labels "$REPO"
+unset FAKE_IGNORE_WRITES
 
 # --- 8. migrate ----------------------------------------------------------------------
 legacy() {

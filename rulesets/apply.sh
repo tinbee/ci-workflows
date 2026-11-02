@@ -10,6 +10,7 @@
 #   pr-flow           ruleset: PR required, review threads resolved   every repo
 #   required-checks   ruleset: the named checks must pass             repos that run CI
 #   repo-settings     wiki off, projects off, delete branch on merge  every repo
+#   labels            claude-review (orange); retired names renamed   every repo
 #
 # The three rulesets are separate on purpose. GitHub adds rulesets together, so a repo
 # with no CI takes the first two and skips the third, and correcting one repo's check
@@ -39,7 +40,7 @@ usage() {
   cat >&2 <<EOF
 usage: $0 [--check] <group> <owner/repo> [check ...]
        $0 --migrate [--allow-dropped-checks] <owner/repo> [check ...]
-groups: branch-safety, pr-flow, required-checks, repo-settings
+groups: branch-safety, pr-flow, required-checks, repo-settings, labels
 EOF
   exit 2
 }
@@ -63,7 +64,7 @@ if [ "$MODE" != migrate ]; then
   [ -n "$GROUP" ] || usage
   shift
   case "$GROUP" in
-    branch-safety | pr-flow | required-checks | repo-settings) ;;
+    branch-safety | pr-flow | required-checks | repo-settings | labels) ;;
     *)
       echo "unknown group: $GROUP" >&2
       usage
@@ -217,6 +218,89 @@ sync_settings() {
     'with_entries(select(.key as $k | $want | has($k)))' <<<"$response")"
 }
 
+# $1 check|apply. The labels labels.json owns, and the retired names it replaces.
+# Compared case-insensitively on colour (GitHub returns lowercase hex), exactly on the
+# description. A name is URL-encoded for the path: "claude-review:opus" has a colon.
+label_path() { printf 'repos/%s/labels/%s' "$REPO" "$(jq -rn --arg n "$1" '$n | @uri')"; }
+
+read_labels() { # -> JSON object {name: {color, description}} of every label on the repo
+  local raw
+  if ! raw=$(gh api "repos/$REPO/labels?per_page=100" --paginate --jq '.[]' 2>&1); then
+    echo "ERROR: cannot read labels for $REPO. Response was:" >&2
+    printf '       %s\n' "$raw" >&2
+    exit 2
+  fi
+  jq -s 'map({key: .name, value: {color: (.color | ascii_downcase), description: (.description // "")}})
+         | from_entries' <<<"$raw"
+}
+
+# What is wrong, one line each: a wanted label that is absent or different, and a retired
+# label that is still there. $1 is the live labels object. Empty output means it matches.
+label_issues() {
+  jq -S '.labels | with_entries(.value.color |= ascii_downcase)' "$HERE/labels.json" |
+    jq -r --argjson live "$1" --slurpfile f "$HERE/labels.json" '
+      ( to_entries[]
+        | select(($live[.key]) != .value)
+        | if $live[.key] == null then "missing: \(.key)"
+          else "differs: \(.key) (live \($live[.key] | tojson), standard \(.value | tojson))" end ),
+      ( $f[0].renamed_from | keys[] | select($live[.] != null) | "retired, still present: \(.)" )'
+}
+
+sync_labels() {
+  local mode="$1" want live from to issues
+  want=$(jq -S '.labels | with_entries(.value.color |= ascii_downcase)' "$HERE/labels.json")
+  live=$(read_labels)
+  issues=$(label_issues "$live")
+
+  if [ -z "$issues" ]; then
+    echo "$REPO: labels match"
+    return 0
+  fi
+  if [ "$mode" = check ]; then
+    echo "DRIFT: $REPO labels differ from rulesets/labels.json" >&2
+    printf '  %s\n' "$issues" >&2
+    return 1
+  fi
+
+  echo "$REPO: updating labels"
+  # Renames first. If the replacement name already exists it is deleted, and the retired
+  # label renamed over it -- that keeps the retired label's PRs labelled.
+  while IFS=$'\t' read -r from to; do
+    [ -n "$from" ] || continue
+    [ "$(jq --arg n "$from" 'has($n)' <<<"$live")" = true ] || continue
+    if [ "$(jq --arg n "$to" 'has($n)' <<<"$live")" = true ]; then
+      echo "  deleting $to (replaced by $from)"
+      gh api "$(label_path "$to")" -X DELETE >/dev/null
+    fi
+    echo "  renaming $from -> $to"
+    jq -n --arg to "$to" --argjson w "$(jq --arg n "$to" '.[$n]' <<<"$want")" \
+      '{new_name: $to, color: $w.color, description: $w.description}' |
+      gh api "$(label_path "$from")" -X PATCH --input - >/dev/null
+  done < <(jq -r '.renamed_from | to_entries[] | [.key, .value] | @tsv' "$HERE/labels.json")
+
+  live=$(read_labels)
+  while IFS= read -r to; do
+    if [ "$(jq --arg n "$to" 'has($n) | not' <<<"$live")" = true ]; then
+      echo "  creating $to"
+      jq -n --arg n "$to" --argjson w "$(jq --arg n "$to" '.[$n]' <<<"$want")" \
+        '{name: $n, color: $w.color, description: $w.description}' |
+        gh api "repos/$REPO/labels" -X POST --input - >/dev/null
+    elif [ "$(jq --argjson want "$want" --arg n "$to" '.[$n] != $want[$n]' <<<"$live")" = true ]; then
+      echo "  updating $to"
+      jq --arg n "$to" '.[$n]' <<<"$want" | gh api "$(label_path "$to")" -X PATCH --input - >/dev/null
+    fi
+  done < <(jq -r 'keys[]' <<<"$want")
+
+  # Read back from GitHub rather than trust the writes.
+  issues=$(label_issues "$(read_labels)")
+  if [ -n "$issues" ]; then
+    echo "ERROR: $REPO labels still differ after writing:" >&2
+    printf '  %s\n' "$issues" >&2
+    return 1
+  fi
+  echo "applied: labels"
+}
+
 migrate() {
   local old_id old dropped extra bypass groups group
   read_listing
@@ -278,6 +362,8 @@ case "$MODE" in
   *)
     if [ "$GROUP" = repo-settings ]; then
       sync_settings "$MODE"
+    elif [ "$GROUP" = labels ]; then
+      sync_labels "$MODE"
     else
       read_listing
       sync_ruleset "$GROUP" "$MODE"

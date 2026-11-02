@@ -18,17 +18,19 @@
 # minutes and is read by nobody. The job consumes the label as its first step, so adding
 # it again requests another pass.
 #
-# The label also chooses the model. `claude-review` reviews with the `model` and `effort`
-# inputs. `claude-review:<model>[:<effort>]` -- `claude-review:opus`,
-# `claude-review:claude-opus-5-5:max` -- reviews that one PR with that model instead. The
+# The `claude-review` label reviews with the `model` and `effort` inputs, and `model` defaults
+# to Opus, so the one label every repo carries means one model: every inline finding on a PR
+# came from it, and a count of unresolved threads means one thing. A label named
+# `claude-review:<model>[:<effort>]` -- `claude-review:sonnet`, `claude-review:claude-opus-5-5:max`
+# -- still reviews that one PR with that model instead, but it is an override a repo creates
+# on purpose, not part of the standard (rulesets/labels.json owns only `claude-review`). The
 # model goes to the CLI verbatim (an alias such as `opus`, or a full model id), so a model
-# released tomorrow works the day the CLI accepts its id: create the label, change nothing
-# here. Nothing is mapped or allow-listed, so nothing goes stale; the value is only held to
-# a strict SHAPE, because it reaches the CLI's arguments. A malformed label fails the job
-# before any review, and a model the CLI rejects fails the Review step -- neither falls back
-# to the default, which would answer a different question than the one the label asked.
-# Whoever can apply a label can pick the model, and so spend its quota: that is triage
-# access, the same people who can already request a review.
+# released tomorrow works the day the CLI accepts its id. Nothing is mapped or allow-listed, so
+# nothing goes stale; the value is only held to a strict SHAPE, because it reaches the CLI's
+# arguments. A malformed label fails the job before any review, and a model the CLI rejects
+# fails the Review step -- neither falls back to the default, which would answer a different
+# question than the one the label asked. Whoever can apply a label can pick the model, and so
+# spend its quota: that is triage access, the same people who can already request a review.
 #
 # Two ways to authenticate; give the job exactly one.
 #   - A Max subscription token (`claude setup-token`) passed as CLAUDE_CODE_OAUTH_TOKEN. Set
@@ -120,7 +122,7 @@ on:
         description: >-
           A label named `<prefix><model>[:<effort>]` requests a review with that model (and
           optionally effort) instead of the `model` / `effort` defaults -- for example
-          `claude-review:opus`, or `claude-review:claude-opus-5-5:max`. The model is passed
+          `claude-review:sonnet`, or `claude-review:claude-opus-5-5:max`. The model is passed
           to the CLI as given, so a new model needs only a new label. Set to "" to turn
           this off.
         type: string
@@ -144,9 +146,9 @@ on:
         type: string
         default: "v1"
       model:
-        description: "Default model for the review; a `<prefix><model>` label overrides it for one PR."
+        description: "Default model for the review: the alias `opus`, i.e. the latest Opus. A `<prefix><model>` label overrides it for one PR."
         type: string
-        default: "claude-sonnet-5-5"
+        default: "opus"
       effort:
         description: "Default effort level passed to the CLI: low, medium, high, xhigh or max."
         type: string
