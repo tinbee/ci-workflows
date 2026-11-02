@@ -1,7 +1,8 @@
 # This repository's own on-demand reviews: it calls the two review workflows it
 # publishes, the way every consumer does. Add the `claude-review` or `copilot-review`
 # label once a PR has settled; each job consumes its label, so adding it again requests
-# another pass. `claude-review:<model>[:<effort>]` reviews that one PR with that model.
+# another pass. `claude-review` reviews with Opus; `claude-review:<model>[:<effort>]` reviews
+# that one PR with that model instead.
 #
 # Both are called at @v1, not by a local `./` path: a consumer gets the released
 # workflow, so that is the one worth exercising here, and a tool reading this file sees

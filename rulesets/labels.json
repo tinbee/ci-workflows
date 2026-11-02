@@ -1,0 +1,29 @@
+{
+  "_comment": [
+    "Not a ruleset: the repository labels the shared workflows are triggered by, applied with",
+    "the labels API. It lives beside the rulesets because apply.sh checks and writes it the",
+    "same way, and the same question -- does this repo match the standard -- covers it.",
+    "",
+    "claude-review is the ONE label that requests a Claude review, and the review uses Opus",
+    "(the `model` default in claude-review.yml). Its colour is orange, F97316, which used to",
+    "mark the per-model labels. It replaces both the old yellow `claude-review` and",
+    "`claude-review:opus`, so every inline finding on a PR came from the same model and an",
+    "unresolved-thread count means one thing.",
+    "",
+    "`renamed_from` maps a retired name to the label that replaces it. Where both exist the",
+    "OLD target is deleted first and the retired label is renamed over it, so a PR that",
+    "carries the retired label keeps a label (the workflow consumes it either way). A repo",
+    "with neither gets the label created. Only the names listed here are touched.",
+    "",
+    "  ./rulesets/apply.sh [--check] labels <owner/repo>"
+  ],
+  "labels": {
+    "claude-review": {
+      "color": "F97316",
+      "description": "Cold-context Claude review using Opus (consumed by the workflow; re-add for another pass)"
+    }
+  },
+  "renamed_from": {
+    "claude-review:opus": "claude-review"
+  }
+}
