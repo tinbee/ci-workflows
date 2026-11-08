@@ -97,7 +97,8 @@ on:
         description: >-
           Test gate. The race detector is on by default and should stay on for anything
           with concurrent moving parts -- a data race that only appears under load is the
-          most expensive kind to find later.
+          most expensive kind to find later. Runs with GOFLAGS -count=1, so no result
+          is ever served from the test cache; an explicit -count here still wins.
         type: string
         default: "go test -race ./..."
       post_command:
@@ -343,10 +344,20 @@ jobs:
         working-directory: ${{ inputs.working_directory }}
         run: ${{ inputs.build_command }}
 
+      # setup-go's cache restores GOCACHE, and GOCACHE holds test results too. Go keys a
+      # cached pass on the code and the env vars a test reads, not on anything outside
+      # the process -- the Postgres it migrates, a container, the network -- so without
+      # this an integration test can report "(cached)" and never run. Set through
+      # GOFLAGS rather than appended to the command, so it also reaches a `go test`
+      # inside `make test`; GOFLAGS applies a flag only to commands that know it, and a
+      # -count on the command line overrides it. Appended, so a caller's GOFLAGS from
+      # env_json (-mod=vendor, say) survives.
       - name: Test
         if: inputs.test_command != ''
         working-directory: ${{ inputs.working_directory }}
-        run: ${{ inputs.test_command }}
+        run: |
+          export GOFLAGS="${GOFLAGS:+$GOFLAGS }-count=1"
+          ${{ inputs.test_command }}
 
       - name: Known vulnerabilities in reachable code
         if: inputs.govulncheck
