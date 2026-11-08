@@ -265,8 +265,9 @@ jobs:
       post_command: make build-agent-linux
       # Only for a repo depending on a private module; see "Private modules" below.
       goprivate: "github.com/tinbee/*"
+      private_module_app_client_id: ${{ vars.TINBEE_GO_MODULES_APP_CLIENT_ID }}
     secrets:
-      private_module_ssh_key: ${{ secrets.FOLIOT_SDK_DEPLOY_KEY }}
+      private_module_app_key: ${{ secrets.TINBEE_GO_MODULES_APP_KEY }}
 ```
 
 #### Inputs
@@ -289,19 +290,21 @@ jobs:
 | `gofmt_check`       | `true`                | Fails when `gofmt -l` names a file.                                                                                                                                                                                           |
 | `timeout_minutes`   | `20`                  |                                                                                                                                                                                                                               |
 | `env_json`          | `{}`                  | Extra env for every step.                                                                                                                                                                                                     |
-| `goprivate`         | `""`                  | Comma-separated module-path globs to fetch direct rather than through `proxy.golang.org`, e.g. `github.com/tinbee/*`. Required for any private module. Pair with the `private_module_ssh_key` secret — each is useless alone. Setting it also turns off the Actions cache, which would otherwise hold the private modules' source. |
+| `private_module_app_client_id` | `""`       | Client ID (not the App ID) of a GitHub App installed with Contents: read on the private module repos. Pair with the `private_module_app_key` secret. Not secret. |
+| `goprivate`         | `""`                  | Comma-separated module-path globs to fetch direct rather than through `proxy.golang.org`, e.g. `github.com/tinbee/*`. Required for any private module. Pair with one credential (the App or a deploy key, below) — each half is useless alone. Setting it also turns off the Actions cache, which would otherwise hold the private modules' source. |
 
 #### Secrets
 
 | Secret                   | Required | Notes                                                                                                                                                                                                                                                      |
 | ------------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `private_module_ssh_key` | no       | Private half of a read-only **deploy key on the repo holding the private modules** (not on the caller). Loaded into an `ssh-agent` for the job, with an `insteadOf` rewrite so the HTTPS URL Go asks for is fetched over SSH. Omit it and the step no-ops. |
+| `private_module_app_key` | no       | PEM private key of that App. The job mints a read-only token for the App's installation on the `goprivate` owner; it expires within the hour and is revoked when the job ends. |
+| `private_module_ssh_key` | no       | Private half of a read-only **deploy key on the repo holding the private modules** (not on the caller). Loaded into an `ssh-agent` for the job, with an `insteadOf` rewrite so the HTTPS URL Go asks for is fetched over SSH. Opens exactly one repo; prefer the App for more. Set one credential, not both; omit both and the step no-ops. |
 
 #### Private modules
 
 A repo's own `GITHUB_TOKEN` cannot read another repo, and cannot read any repo in another
-org — so a module shared between orgs needs its own credential. Two settings, and each is
-useless alone:
+org — so a module shared between orgs needs its own credential. `goprivate` plus **one**
+credential:
 
 ```yaml
 jobs:
@@ -309,23 +312,43 @@ jobs:
     uses: tinbee/ci-workflows/.github/workflows/go-ci.yml@v1
     with:
       goprivate: "github.com/tinbee/*"
+      private_module_app_client_id: ${{ vars.TINBEE_GO_MODULES_APP_CLIENT_ID }}
     secrets:
-      private_module_ssh_key: ${{ secrets.FOLIOT_SDK_DEPLOY_KEY }}
+      private_module_app_key: ${{ secrets.TINBEE_GO_MODULES_APP_KEY }}
 ```
 
-Setting **exactly one** of the two is an error rather than a warning, because
-half-configured fails later and elsewhere: `goprivate` alone makes Go fetch direct from a
-URL it cannot authenticate, a key alone leaves Go asking the public proxy for a module it
-cannot see, and both read as "module not found" from whichever of `buf`, `sqlc`,
-`golangci-lint` or `go build` happens to fetch first.
+Anything else is an error rather than a warning — `goprivate` alone, a credential alone,
+half an App, or both credentials — because half-configured fails later and elsewhere:
+`goprivate` alone makes Go fetch direct from a URL it cannot authenticate, a credential
+alone leaves Go asking the public proxy for a module it cannot see, and both read as
+"module not found" from whichever of `buf`, `sqlc`, `golangci-lint` or `go build` happens
+to fetch first.
 
-To set the credential up, on the repo that **holds** the modules:
+**The App (preferred).** A GitHub App costs no seat, belongs to the org rather than a
+person, and one App reads every repo it is installed on, where a deploy key opens exactly
+one. Tin Bee's is `tinbee-go-modules` (client ID `Iv23lie0cwSWQ9dH29YV`): Contents
+read-only, no webhook, installable only on tinbee, installed on `tinbee/foliot` and
+`tinbee/gokit`; its key is in 1Password (Tin Bee vault). A new private module repo is added
+to the installation, not to every consumer. A new consumer gets the variable and the secret
+— in the **Dependabot** secret store too, since Dependabot runs read only that one:
+
+```bash
+gh variable set TINBEE_GO_MODULES_APP_CLIENT_ID -R <consumer> --body Iv23lie0cwSWQ9dH29YV
+gh secret set TINBEE_GO_MODULES_APP_KEY -R <consumer> < key.pem
+gh secret set TINBEE_GO_MODULES_APP_KEY -R <consumer> --app dependabot < key.pem
+```
+
+The App is never installed on the consumer: the consumer holds the key and mints a token
+for the App's tinbee installation; its own checkout uses its own `GITHUB_TOKEN`.
+
+**A deploy key** (`private_module_ssh_key`) still works for a single module repo. On the
+repo that **holds** the module:
 
 ```bash
 KEYDIR=$(mktemp -d)
 ssh-keygen -t ed25519 -N "" -C "<consumer> reads <owner>/<repo>" -f "$KEYDIR/key"
 gh repo deploy-key add "$KEYDIR/key.pub" --repo <owner>/<repo> --title "<consumer> (read-only)"
-gh secret set FOLIOT_SDK_DEPLOY_KEY --repo <consumer-owner>/<consumer-repo> < "$KEYDIR/key"
+gh secret set <SECRET_NAME> --repo <consumer-owner>/<consumer-repo> < "$KEYDIR/key"
 rm -rf "$KEYDIR"
 ```
 
