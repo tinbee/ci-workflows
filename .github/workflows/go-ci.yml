@@ -20,8 +20,9 @@
 #         golangci_version: v2.14
 #         post_command: make build-agent-linux
 #         goprivate: "github.com/tinbee/*"
+#         private_module_app_client_id: Iv23lie0cwSWQ9dH29YV  # tinbee-go-modules
 #       secrets:
-#         private_module_ssh_key: ${{ secrets.FOLIOT_SDK_DEPLOY_KEY }}
+#         private_module_app_key: ${{ secrets.TINBEE_GO_MODULES_APP_KEY }}
 #
 # NOTE ON THE CHECK NAME. Moving a repo from an inline CI job onto this workflow CHANGES
 # the check-run name: an inline job named `CI` reports `CI`, while a job that calls this
@@ -128,10 +129,27 @@ on:
           proxy.golang.org, e.g. "github.com/tinbee/*". Required for any private module:
           the public proxy and checksum database cannot see a private repo, and the
           failure is a 404 from the proxy that reads like a typo in the module path.
-          Pair it with the private_module_ssh_key secret -- each is useless alone.
+          Pair it with ONE credential -- private_module_app_client_id plus the
+          private_module_app_key secret, or the private_module_ssh_key secret. Each half
+          is useless alone.
+        type: string
+        default: ""
+      private_module_app_client_id:
+        description: >-
+          Client ID (not the App ID) of a GitHub App installed, with Contents: read, on
+          the repos holding the private modules. Pair it with the private_module_app_key
+          secret. Not a secret: it names the App, and the key is what authenticates. One
+          App reads every repo it is installed on, so prefer it to a deploy key, which
+          opens exactly one repo.
         type: string
         default: ""
     secrets:
+      private_module_app_key:
+        description: >-
+          Private key (PEM) of the GitHub App named by private_module_app_client_id. The
+          job mints a read-only token for the App's installation on the goprivate owner,
+          which expires within the hour and is revoked when the job ends.
+        required: false
       private_module_ssh_key:
         description: >-
           Private half of a read-only DEPLOY KEY on the repo holding the private modules
@@ -141,7 +159,10 @@ on:
           Needed because a repo's own GITHUB_TOKEN cannot read another repo, and cannot
           read ANY repo in another org -- which is the usual case for a shared module.
 
-          Omit it and nothing happens: the step no-ops, so public-module repos are
+          A deploy key opens exactly one repo, so it suits one private module repo; for
+          more, use the App (private_module_app_client_id). Set one credential, not both.
+
+          Omit both and nothing happens: the step no-ops, so public-module repos are
           unaffected.
         required: false
 
@@ -181,29 +202,66 @@ jobs:
       # `if: secrets.x != ''` is not evaluated the way it reads in a reusable workflow,
       # so the guard is inside the script where it is unambiguous: no key, no-op, and a
       # repo with only public modules is untouched.
+      #
+      # With the App, this step only validates and names the owner; the two steps after it
+      # mint the token and install it. With a deploy key, it does the whole job.
       - name: Private Go modules
+        id: private
         env:
           PRIVATE_MODULE_SSH_KEY: ${{ secrets.private_module_ssh_key }}
+          PRIVATE_MODULE_APP_KEY: ${{ secrets.private_module_app_key }}
+          APP_CLIENT_ID: ${{ inputs.private_module_app_client_id }}
           GOPRIVATE_IN: ${{ inputs.goprivate }}
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ -z "${GOPRIVATE_IN}" ] && [ -z "${PRIVATE_MODULE_SSH_KEY}" ]; then
+          set_or_empty() { [ -n "$1" ] && echo set || echo EMPTY; }
+          state="goprivate=$(set_or_empty "${GOPRIVATE_IN}"), private_module_app_client_id=$(set_or_empty "${APP_CLIENT_ID}"), private_module_app_key=$(set_or_empty "${PRIVATE_MODULE_APP_KEY}"), private_module_ssh_key=$(set_or_empty "${PRIVATE_MODULE_SSH_KEY}")"
+
+          if [ -z "${GOPRIVATE_IN}${APP_CLIENT_ID}${PRIVATE_MODULE_APP_KEY}${PRIVATE_MODULE_SSH_KEY}" ]; then
             echo "No private-module config; skipping."
             exit 0
           fi
 
           # Half-configured is the dangerous state, because it fails LATER and elsewhere:
           # GOPRIVATE alone makes Go fetch direct from a URL it cannot authenticate, and
-          # a key alone leaves Go asking the public proxy for a module it cannot see.
-          # Both read as "module not found".
-          if [ -z "${GOPRIVATE_IN}" ] || [ -z "${PRIVATE_MODULE_SSH_KEY}" ]; then
-            echo "::error::private-module config is half set: goprivate=$([ -n "${GOPRIVATE_IN}" ] && echo set || echo EMPTY), private_module_ssh_key=$([ -n "${PRIVATE_MODULE_SSH_KEY}" ] && echo set || echo EMPTY). Both are required together."
+          # a credential alone leaves Go asking the public proxy for a module it cannot
+          # see. Both read as "module not found". So: goprivate plus exactly one complete
+          # credential, or an error naming what is missing.
+          app=0; ssh=0
+          [ -n "${APP_CLIENT_ID}${PRIVATE_MODULE_APP_KEY}" ] && app=1
+          [ -n "${PRIVATE_MODULE_SSH_KEY}" ] && ssh=1
+          if [ -z "${GOPRIVATE_IN}" ] || [ $((app + ssh)) -ne 1 ] \
+            || { [ "$app" = 1 ] && { [ -z "${APP_CLIENT_ID}" ] || [ -z "${PRIVATE_MODULE_APP_KEY}" ]; }; }; then
+            echo "::error::private-module config is incomplete: ${state}. Set goprivate plus ONE credential: private_module_app_client_id with the private_module_app_key secret, or the private_module_ssh_key secret."
             exit 1
           fi
 
           echo "GOPRIVATE=${GOPRIVATE_IN}" >> "$GITHUB_ENV"
+
+          if [ "$app" = 1 ]; then
+            # A token covers one installation, and an installation is one owner, so every
+            # goprivate glob must be under the same github.com owner.
+            owners=()
+            IFS=',' read -ra globs <<< "${GOPRIVATE_IN}"
+            for glob in "${globs[@]}"; do
+              prefix="${glob%/\*}"; prefix="${prefix%/}"
+              case "$prefix" in
+                github.com/*/*|github.com/*) owner="${prefix#github.com/}"; owners+=("${owner%%/*}") ;;
+                *) echo "::error::goprivate glob '${glob}' is not under github.com; the App token only covers github.com."; exit 1 ;;
+              esac
+            done
+            uniq_owners=$(printf '%s\n' "${owners[@]}" | sort -u)
+            if [ "$(printf '%s\n' "$uniq_owners" | wc -l)" -ne 1 ]; then
+              echo "::error::goprivate names more than one github.com owner ($(tr '\n' ' ' <<< "${uniq_owners}")); one App token covers one owner's installation."
+              exit 1
+            fi
+            echo "mode=app" >> "$GITHUB_OUTPUT"
+            echo "owner=${uniq_owners}" >> "$GITHUB_OUTPUT"
+            echo "Private modules under github.com/${uniq_owners}/ via GitHub App ${APP_CLIENT_ID}."
+            exit 0
+          fi
 
           # The agent's socket has to outlive this step, so its address goes into
           # $GITHUB_ENV. `ssh-add -` reads the key from stdin, so it is never written to
@@ -267,6 +325,40 @@ jobs:
             *)
               echo "::warning::could not confirm the key authenticates to github.com; continuing, because the module fetch is the real test. ssh said: ${probe}"
               ;;
+          esac
+
+      # No `repositories:`, so the token covers every repo the App is installed on under
+      # that owner -- which the installation, not this workflow, keeps to the module
+      # repos. The action masks the token and revokes it in its post step.
+      - name: Private Go modules (App token)
+        id: app-token
+        if: steps.private.outputs.mode == 'app'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ inputs.private_module_app_client_id }}
+          private-key: ${{ secrets.private_module_app_key }}
+          owner: ${{ steps.private.outputs.owner }}
+          permission-contents: read
+
+      # Same insteadOf idea as the SSH path, but to HTTPS with the token, and only for
+      # the goprivate owner so every other module still comes from the proxy. The token
+      # goes in through env, never the command line.
+      - name: Private Go modules (git credential)
+        if: steps.private.outputs.mode == 'app'
+        env:
+          TOKEN: ${{ steps.app-token.outputs.token }}
+          OWNER: ${{ steps.private.outputs.owner }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config --global "url.https://x-access-token:${TOKEN}@github.com/${OWNER}/.insteadOf" "https://github.com/${OWNER}/"
+          echo "rewrite: https://github.com/${OWNER}/ -> App token"
+          # Diagnostic, like the SSH probe: a token that cannot list its repos is named
+          # here; the module fetch stays the real test, so this warns.
+          repos="$(curl -fsS -H "Authorization: token ${TOKEN}" "${GITHUB_API_URL}/installation/repositories" 2>&1 | jq -r '.repositories[].full_name' 2>&1 || true)"
+          case "$repos" in
+            "${OWNER}/"*) echo "App token reads: $(tr '\n' ' ' <<< "${repos}")" ;;
+            *) echo "::warning::could not list the App installation's repos; continuing, because the module fetch is the real test. Got: ${repos}" ;;
           esac
 
       - name: Pre-command
