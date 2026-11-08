@@ -265,7 +265,7 @@ jobs:
       post_command: make build-agent-linux
       # Only for a repo depending on a private module; see "Private modules" below.
       goprivate: "github.com/tinbee/*"
-      private_module_app_client_id: ${{ vars.TINBEE_GO_MODULES_APP_CLIENT_ID }}
+      private_module_app_client_id: Iv23lie0cwSWQ9dH29YV  # tinbee-go-modules
     secrets:
       private_module_app_key: ${{ secrets.TINBEE_GO_MODULES_APP_KEY }}
 ```
@@ -312,7 +312,7 @@ jobs:
     uses: tinbee/ci-workflows/.github/workflows/go-ci.yml@v1
     with:
       goprivate: "github.com/tinbee/*"
-      private_module_app_client_id: ${{ vars.TINBEE_GO_MODULES_APP_CLIENT_ID }}
+      private_module_app_client_id: Iv23lie0cwSWQ9dH29YV  # tinbee-go-modules
     secrets:
       private_module_app_key: ${{ secrets.TINBEE_GO_MODULES_APP_KEY }}
 ```
@@ -329,11 +329,12 @@ person, and one App reads every repo it is installed on, where a deploy key open
 one. Tin Bee's is `tinbee-go-modules` (client ID `Iv23lie0cwSWQ9dH29YV`): Contents
 read-only, no webhook, installable only on tinbee, installed on `tinbee/foliot` and
 `tinbee/gokit`; its key is in 1Password (Tin Bee vault). A new private module repo is added
-to the installation, not to every consumer. A new consumer gets the variable and the secret
-— in the **Dependabot** secret store too, since Dependabot runs read only that one:
+to the installation, not to every consumer. The client ID goes in the caller as a literal:
+it is not secret, and Dependabot-triggered runs are not documented to see `vars`. A new
+consumer gets only the key, in the **Dependabot** secret store too, since Dependabot runs
+read only that one:
 
 ```bash
-gh variable set TINBEE_GO_MODULES_APP_CLIENT_ID -R <consumer> --body Iv23lie0cwSWQ9dH29YV
 gh secret set TINBEE_GO_MODULES_APP_KEY -R <consumer> < key.pem
 gh secret set TINBEE_GO_MODULES_APP_KEY -R <consumer> --app dependabot < key.pem
 ```

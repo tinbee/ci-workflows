@@ -20,7 +20,7 @@
 #         golangci_version: v2.14
 #         post_command: make build-agent-linux
 #         goprivate: "github.com/tinbee/*"
-#         private_module_app_client_id: ${{ vars.TINBEE_GO_MODULES_APP_CLIENT_ID }}
+#         private_module_app_client_id: Iv23lie0cwSWQ9dH29YV  # tinbee-go-modules
 #       secrets:
 #         private_module_app_key: ${{ secrets.TINBEE_GO_MODULES_APP_KEY }}
 #
