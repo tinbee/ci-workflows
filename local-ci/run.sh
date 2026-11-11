@@ -170,14 +170,31 @@ fi
 [ -n "${LOCAL_CI_CLAUDE_TOKEN:-}" ] || die "LOCAL_CI_CLAUDE_TOKEN is not set (a 'claude setup-token' token; op-secrets loads it)"
 
 # --- what to run: the commit's own .local-ci.yml and ci.yml, go-ci.yml's defaults at v1 -------
-cfg="$(git show "$sha:.local-ci.yml" 2>/dev/null)" || die "no .local-ci.yml at ${sha:0:12} (local-ci/README.md)"
-ci_yml="$(git show "$sha:.github/workflows/ci.yml" 2>/dev/null)" || die "no .github/workflows/ci.yml at ${sha:0:12}"
-job="$(yq -r '.ci_job // ""' <<<"$cfg")"
+# Both files come from the commit, which is untrusted. Each is parsed ONCE with a fixed yq
+# expression; every lookup after that is jq with the commit's strings passed as --arg data,
+# never spliced into an expression (yq has load() and env(): a crafted job name could read
+# host files into the inputs the commit's code is given). Every value that then reaches a
+# shell, a docker flag or a path must match a pattern first.
+cfg="$(git show "$sha:.local-ci.yml" 2>/dev/null | yq -o json '.')" \
+  || die "no readable .local-ci.yml at ${sha:0:12} (local-ci/README.md)"
+ci="$(git show "$sha:.github/workflows/ci.yml" 2>/dev/null | yq -o json '.')" \
+  || die "no readable .github/workflows/ci.yml at ${sha:0:12}"
+must_match() { # <what> <value> <extended regex>
+  [[ "$2" =~ $3 ]] || die "$1 '$2' is not of the form $3"
+}
+must_be_relative_path() { # <what> <value>: inside the tree, no `..`
+  must_match "$1" "$2" '^[A-Za-z0-9_.][A-Za-z0-9_./-]*$'
+  case "/$2/" in */../*) die "$1 '$2' leaves the repository" ;; esac
+}
+name_re='^[A-Za-z0-9][A-Za-z0-9_.-]*$'
+
+job="$(jq -r '.ci_job // ""' <<<"$cfg")"
 if [ -z "$job" ]; then
-  job="$(yq -r '.jobs | to_entries[] | select((.value.uses // "") | test("/go-ci\.yml@")) | .key' <<<"$ci_yml" | head -1)"
+  job="$(jq -r '.jobs | to_entries[] | select((.value.uses // "") | test("/go-ci\\.yml@")) | .key' <<<"$ci" | head -1)"
 fi
 [ -n "$job" ] || die "ci.yml at ${sha:0:12} has no job calling go-ci.yml (set ci_job in .local-ci.yml)"
-case "$(yq -r ".jobs.\"$job\".uses // \"\"" <<<"$ci_yml")" in
+must_match "ci_job" "$job" "$name_re"
+case "$(jq -r --arg j "$job" '.jobs[$j].uses // ""' <<<"$ci")" in
   */go-ci.yml@*) ;;
   *) die "ci.yml job '$job' does not call go-ci.yml" ;;
 esac
@@ -185,18 +202,27 @@ esac
 # The caller's `with` over go-ci.yml's own defaults, so a default changed at v1 is the
 # default here too.
 defaults="$(yq -o json '.on.workflow_call.inputs | map_values(.default)' "$shared/.github/workflows/go-ci.yml")"
-with="$(yq -o json ".jobs.\"$job\".with // {}" <<<"$ci_yml")"
+with="$(jq -c --arg j "$job" '.jobs[$j].with // {}' <<<"$ci")"
 if jq -e 'to_entries | any(.value | tostring | contains("${{"))' <<<"$with" >/dev/null; then
   die "ci.yml job '$job' passes a \${{ }} expression to go-ci, which this cannot evaluate: $(jq -c 'to_entries | map(select(.value | tostring | contains("${{"))) | from_entries' <<<"$with")"
 fi
-after="$(yq -r '.after // ""' <<<"$cfg")"
+after="$(jq -r '.after // ""' <<<"$cfg")"
+[ -z "$after" ] || must_be_relative_path "after" "$after"
 inputs="$(jq -n --argjson d "$defaults" --argjson w "$with" --arg after "$after" '$d + $w + {after: $after}')"
 input() { jq -r --arg k "$1" '.[$k] // "" | tostring' <<<"$inputs"; }
 
+# These reach a Dockerfile's RUN lines (as build args), an image tag and git paths.
+must_match "buf" "$(input buf)" '^(true|false)$'
+must_match "govulncheck" "$(input govulncheck)" '^(true|false)$'
+must_match "sqlc_version" "$(input sqlc_version)" '^([0-9]+\.[0-9]+\.[0-9]+)?$'
+must_match "golangci_version" "$(input golangci_version)" '^(v[0-9]+(\.[0-9]+){0,2})?$'
 wd="$(input working_directory)"
 wd="${wd:-.}"
+must_be_relative_path "working_directory" "$wd"
+must_be_relative_path "go_version_file" "$(input go_version_file)"
 go_version="$(git show "$sha:$wd/$(input go_version_file)" | awk '$1 == "go" { print $2; exit }')"
 [ -n "$go_version" ] || die "no go line in $wd/$(input go_version_file) at ${sha:0:12}"
+must_match "go version" "$go_version" '^[0-9]+\.[0-9]+(\.[0-9]+)?((rc|beta)[0-9]+)?$'
 
 out="$results/$sha"
 mkdir -p "$out"
@@ -245,18 +271,26 @@ git show "$sha:.github/workflows/claude-review.yml" 2>/dev/null \
   || : > "$work/review/project_context.txt"
 
 # Modules: a vendored repo needs none. Otherwise the HOST downloads them, with its own
-# credentials for private ones (goprivate), into a cache the checks container sees only as a
-# read-only GOPROXY=file:// tree. Go checks every module against the commit's go.sum, so the
-# container can neither fetch anything else nor reach a credential. `go mod download` runs no
-# module code.
+# credentials for private ones, into a cache the checks container sees only as a read-only
+# GOPROXY=file:// tree. Go checks every module against the commit's go.sum, so the container
+# can neither fetch anything else nor reach a credential. `go mod download` runs no module
+# code, and the commit decides none of how it fetches:
+#   GOPRIVATE  the host's own, never ci.yml's goprivate: `*` there would send every fetch,
+#              vanity paths included, straight to VCS with the host's git credentials.
+#   GOVCS      private modules by git only, public ones only through the module proxy.
+#   GOTOOLCHAIN=local  go.mod's `toolchain` line cannot download and run another Go here.
 module_flags=()
 if ! git cat-file -e "$sha:$wd/vendor/modules.txt" 2>/dev/null; then
   command -v go >/dev/null || die "go is not installed on the host, and ${sha:0:12} is not vendored"
   mkdir -p "$GOMODCACHE_HOST"
-  goprivate="$(input goprivate)"
+  host_goprivate="$(go env GOPRIVATE)"
+  if [ -n "$(input goprivate)" ] && [ "$(input goprivate)" != "$host_goprivate" ]; then
+    echo "local-ci: ci.yml's goprivate is '$(input goprivate)'; fetching with this machine's GOPRIVATE '$host_goprivate'" >&2
+  fi
   echo "local-ci: fetching modules on the host into $GOMODCACHE_HOST" >&2
   (cd "$work/tree/$wd" && GOMODCACHE="$GOMODCACHE_HOST" GOWORK=off GOFLAGS=-mod=mod \
-    GOPRIVATE="${goprivate:-${GOPRIVATE:-}}" go mod download) > "$out/modules.log" 2>&1 \
+    GOPRIVATE="$host_goprivate" GONOPROXY='' GONOSUMDB='' GOINSECURE='' GOVCS='private:git,public:off' \
+    GOTOOLCHAIN=local go mod download) > "$out/modules.log" 2>&1 \
     || { tail -20 "$out/modules.log" >&2; die "could not download ${sha:0:12}'s modules on the host (log: $out/modules.log)"; }
   module_flags=(-v "$GOMODCACHE_HOST/cache/download:/goproxy:ro"
     -e GOPROXY=file:///goproxy -e GOSUMDB=off -e GOFLAGS=-mod=mod -e GOPRIVATE= -e GONOSUMDB=)
@@ -292,17 +326,40 @@ t0=$SECONDS
 docker network create --internal "$ns" >/dev/null
 start_proxy "$ns" "$ns-proxy" "$shared/local-ci/checks-allow.txt"
 
+# .local-ci.yml env as `docker run -e` flags, into env_flags. Split on lines, a
+# value `"x\nLOCAL_CI_CLAUDE_TOKEN"` became a bare `-e LOCAL_CI_CLAUDE_TOKEN`, which docker
+# fills from THIS shell's environment: the token, into the container that runs the commit.
+# So jq itself refuses a key that is not a name and a value with a newline, CR or NUL, and
+# emits NUL-separated pairs; they go through a file so a jq refusal stops the run rather
+# than ending a loop early. Every pair must still contain `=`.
+env_flags_from() { # <jq path to an object> [<value for $n in the path>]
+  local kv file="$work/env-pairs"
+  env_flags=()
+  jq -j --arg n "${2:-}" "$1"' // {} | to_entries[]
+    | if (.key | test("^[A-Za-z_][A-Za-z0-9_]*$"))
+         and ((.value | tostring) | test("[\n\r\u0000]") | not)
+      then "\(.key)=\(.value | tostring)\u0000"
+      else error("env \(.key | tojson): must be a NAME with a value on one line")
+      end' <<<"$cfg" > "$file" || die ".local-ci.yml: an env entry is not NAME: one-line value"
+  while IFS= read -r -d '' kv; do
+    [[ "$kv" == *=* ]] || die ".local-ci.yml: env entry without '=': $kv"
+    env_flags+=(-e "$kv")
+  done < "$file"
+}
+
 no_proxy=localhost,127.0.0.1
 while IFS=$'\t' read -r name image; do
   [ -n "$name" ] || continue
-  env_flags=()
-  while IFS= read -r kv; do
-    [ -n "$kv" ] && env_flags+=(-e "$kv")
-  done < <(yq -r ".services.\"$name\".env // {} | to_entries[] | \"\(.key)=\(.value)\"" <<<"$cfg")
+  must_match "service name" "$name" "$name_re"
+  # Positional after the flags, so an image starting with `-` would be read as one.
+  must_match "service image" "$image" '^[A-Za-z0-9][A-Za-z0-9._/:@-]*$'
+  # shellcheck disable=SC2016 # $n is a jq variable, bound by --arg
+  env_flags_from '.services[$n].env' "$name"
   docker run -d --label "local-ci.run=$ns" --name "$ns-$name" --network "$ns" --network-alias "$name" \
     ${env_flags[@]+"${env_flags[@]}"} "$image" >/dev/null
   no_proxy="$no_proxy,$name"
-  ready="$(yq -r ".services.\"$name\".ready // \"\"" <<<"$cfg")"
+  # Runs in the service's own container, which has no credential and no route out.
+  ready="$(jq -r --arg n "$name" '.services[$n].ready // ""' <<<"$cfg")"
   if [ -n "$ready" ]; then
     ok=""
     for _ in $(seq 1 60); do
@@ -311,18 +368,16 @@ while IFS=$'\t' read -r name image; do
     done
     [ -n "$ok" ] || die "service $name did not become ready in 60s ($ready)"
   fi
-done < <(yq -r '.services // {} | to_entries[] | "\(.key)\t\(.value.image)"' <<<"$cfg")
+done < <(jq -r '.services // {} | to_entries[] | "\(.key)\t\(.value.image)"' <<<"$cfg")
 
-env_flags=()
-while IFS= read -r kv; do
-  [ -n "$kv" ] && env_flags+=(-e "$kv")
-done < <(yq -r '.env // {} | to_entries[] | "\(.key)=\(.value)"' <<<"$cfg")
+env_flags_from '.env'
 
+# No build cache kept between runs: the commit's code can write to it, and Go trusts a cache
+# entry by its key, so one commit could plant a result a later commit's build would use.
 # In an `if`, so a failing check is a result here rather than an ERR.
 if tar -C "$work/checks" -cf - . | docker run --rm -i --label "local-ci.run=$ns" --network "$ns" \
   -e SHA="$sha" -e HTTPS_PROXY=http://proxy:8888 -e HTTP_PROXY=http://proxy:8888 -e NO_PROXY="$no_proxy" \
   ${module_flags[@]+"${module_flags[@]}"} ${env_flags[@]+"${env_flags[@]}"} \
-  -v "local-ci-gocache-$repo_name:/home/ci/.cache/go-build" \
   "$checks_image" > "$out/checks.log" 2>&1; then
   checks_exit=0
 else
