@@ -229,12 +229,32 @@ out="$results/$sha"
 mkdir -p "$out"
 work="$(mktemp -d)"
 ns="local-ci-$repo_name-$$"
+started="$(date -u +%FT%TZ)"
+
+# state.json, beside the result: where this run is, for anything watching runs live (confleet's
+# Local CI page). `pid` and `ns` (the label on every container this run starts) are what a
+# cancel needs: TERM to the pid, `docker rm -f` by label. Written whole, via a rename.
+state() { # <phase> [<exit code>]
+  jq -n --arg sha "$sha" --arg base "$base" --arg phase "$1" --argjson pid "$$" --arg ns "$ns" \
+    --arg started "$started" --arg at "$(date -u +%FT%TZ)" --arg exit "${2:-}" \
+    '{sha: $sha, base: $base, pid: $pid, ns: $ns, phase: $phase, started: $started, updated: $at}
+     + (if $exit == "" then {} else {exit: ($exit | tonumber), finished: $at} end)' \
+    > "$out/state.json.tmp" && mv "$out/state.json.tmp" "$out/state.json"
+}
+
 cleanup() {
+  local rc=$?
+  state "done" "$rc" 2>/dev/null || true
   docker ps -aq --filter "label=local-ci.run=$ns" | xargs docker rm -f >/dev/null 2>&1 || true
   docker network rm "$ns" "$ns-review" >/dev/null 2>&1 || true
   rm -rf "$work"
 }
 trap cleanup EXIT
+# A cancel is a TERM. Bash defers it while a foreground command runs, so a cancel also removes
+# this run's containers, which ends that command; then this exits and cleanup records it.
+trap 'exit 143' TERM
+trap 'exit 130' INT
+state preparing
 
 write_result() { # <status> <checks exit> <review json or null> <envelope json or null>
   jq -n --arg sha "$sha" --arg base "$base" --arg status "$1" --argjson checks_exit "$2" \
@@ -280,6 +300,7 @@ git show "$sha:.github/workflows/claude-review.yml" 2>/dev/null \
 #              vanity paths included, straight to VCS with the host's git credentials.
 #   GOVCS      private modules by git only, public ones only through the module proxy.
 #   GOTOOLCHAIN=local  go.mod's `toolchain` line cannot download and run another Go here.
+state modules
 module_flags=()
 if ! git cat-file -e "$sha:$wd/vendor/modules.txt" 2>/dev/null; then
   command -v go >/dev/null || die "go is not installed on the host, and ${sha:0:12} is not vendored"
@@ -298,6 +319,7 @@ if ! git cat-file -e "$sha:$wd/vendor/modules.txt" 2>/dev/null; then
 fi
 
 checks_image="local-ci-checks:go$go_version-buf$(input buf)-sqlc$(input sqlc_version)-golangci$(input golangci_version)-vuln$(input govulncheck)"
+state images
 echo "local-ci: building images (Go $go_version)" >&2
 docker build -q --build-arg GO_VERSION="$go_version" --build-arg BUF="$(input buf)" \
   --build-arg SQLC_VERSION="$(input sqlc_version)" --build-arg GOLANGCI_VERSION="$(input golangci_version)" \
@@ -322,6 +344,7 @@ start_proxy() { # <network> <name> <allow file>: the only way out of an --intern
 }
 
 # --- checks -----------------------------------------------------------------------------------
+state checks
 echo "local-ci: checks on ${sha:0:12}: ci.yml job '$job' (go-ci.yml), then ${after:-no after script} (log: $out/checks.log)" >&2
 t0=$SECONDS
 docker network create --internal "$ns" >/dev/null
@@ -397,6 +420,7 @@ fi
 echo "local-ci: checks passed (${checks_s}s)" >&2
 
 # --- review -----------------------------------------------------------------------------------
+state review
 echo "local-ci: review of ${base:0:12}...${sha:0:12} with $MODEL ($EFFORT) (log: $out/review.log)" >&2
 t0=$SECONDS
 docker network create --internal "$ns-review" >/dev/null

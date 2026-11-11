@@ -15,6 +15,12 @@ findings, timings and the review's cost, is in `$(git rev-parse --git-common-dir
 A pre-push hook refuses a branch whose tip has not passed or been accepted
 (`git push --no-verify` skips it).
 
+While a run is going, `state.json` beside the result says where it is: `phase` (`preparing`,
+`modules`, `images`, `checks`, `review`, then `done` with `exit` and `finished`), plus the
+run's `pid` and `ns`, the label on every container it starts. To cancel a run: TERM the pid
+and `docker rm -f` the containers labelled `local-ci.run=<ns>` (bash defers the TERM until the
+running command ends; removing the containers ends it). confleet's Local CI page reads these.
+
 ## What runs
 
 **Checks: go-ci.yml, as the commit's own ci.yml calls it.** `go-checks.sh` runs go-ci's
