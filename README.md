@@ -537,6 +537,14 @@ label and nothing else changes. Labels are per repository; the standard one is c
 beside the caller's code. Consumer repos keep only their own invariants. See
 [`review-rules/README.md`](review-rules/README.md) for the index and what each covers.
 
+#### The prompt, shared with local pre-flight reviews
+
+What the reviewer is told lives in [`review/`](review/README.md), not in this workflow:
+`core.md` plus an ending, joined by `review/assemble.sh`. This workflow uses the
+`publish-pr.md` ending (inline threads). A repo's local pre-flight (`make local-ci`, first in
+tinbee/woahbar) uses `local/return-structured.md` and the container in `review/local/`, so a
+review before the push and one on the PR are given the same instructions.
+
 ### `copilot-review.yml`
 
 Requests a Copilot code review **on demand, by label** — the same shape as
