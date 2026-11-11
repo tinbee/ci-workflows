@@ -22,9 +22,15 @@ if [ -z "$ciw" ] || [ ! -d "$ciw/.git" ]; then
   exit 3
 fi
 
-# v1 floats: refresh it, so this runs what the label review runs today.
-git -C "$ciw" fetch -q --force origin "refs/tags/$ref:refs/tags/$ref" 2>/dev/null \
-  || echo "local-ci: could not refresh $ref of $ciw; using the local copy" >&2
+# v1 floats: refresh it, so this runs what the label review runs today. This also runs in the
+# pre-push hook, so it must not hang a push: no prompts, and a bounded stall over HTTPS
+# (lowSpeedLimit/Time) and SSH (connect and keepalive timeouts). On failure, the local copy.
+if ! GIT_TERMINAL_PROMPT=0 \
+  GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2" \
+  git -C "$ciw" -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=10 \
+  fetch -q --force origin "refs/tags/$ref:refs/tags/$ref" 2>/dev/null; then
+  echo "local-ci: could not refresh $ref of $ciw; using the local copy" >&2
+fi
 
 shared="$(mktemp -d)"
 trap 'rm -rf "$shared"' EXIT
