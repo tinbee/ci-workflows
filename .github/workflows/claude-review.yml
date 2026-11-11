@@ -396,6 +396,14 @@ jobs:
         if: env.ELIGIBLE == 'true' && steps.ci.outputs.result == 'success'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # The PR is untrusted and may commit its own .shared-review-rules/ or .review-context/.
+      # A .review-context/pr.diff symlinked into .shared-review-rules/ would make the diff
+      # step below write the PR's own text over a trusted file, and so into the prompt.
+      # These two paths belong to this job: clear them before anything is put there.
+      - name: Clear the paths the review owns
+        if: env.ELIGIBLE == 'true' && steps.ci.outputs.result == 'success'
+        run: rm -rf -- .shared-review-rules .review-context
+
       # The shared rules, beside the caller's code, sparse so the rest of this repo's
       # workflows are not dragged into the review's workspace.
       - name: Checkout the shared review rules
@@ -405,7 +413,10 @@ jobs:
           repository: tinbee/ci-workflows
           ref: ${{ inputs.rules_ref }}
           path: .shared-review-rules
-          sparse-checkout: review-rules
+          # review/ holds the prompt (core.md + publish-pr.md) and its assembler.
+          sparse-checkout: |
+            review-rules
+            review
           sparse-checkout-cone-mode: false
 
       # The diff goes to a file HERE, not from inside the review: the reviewer's own
@@ -430,6 +441,33 @@ jobs:
             echo "::warning::gh pr diff failed -- the reviewer gets the file list only"
             : > .review-context/pr.diff
           fi
+
+      # The prompt is assembled from review/ (core.md + publish-pr.md), the same core a repo's
+      # local pre-flight review uses (review/local), so the two cannot be told different
+      # things. It comes from rules_ref with the rules. Inputs reach the script through env,
+      # never interpolated into it.
+      - name: Build the review prompt
+        id: prompt
+        if: env.ELIGIBLE == 'true' && steps.ci.outputs.result == 'success'
+        env:
+          PROJECT_CONTEXT: ${{ inputs.project_context }}
+          PROJECT_RULES: ${{ inputs.project_rules }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          RULES_REF: ${{ inputs.rules_ref }}
+        run: |
+          set -euo pipefail
+          assemble=.shared-review-rules/review/assemble.sh
+          if [ ! -f "$assemble" ]; then
+            echo "::error::rules_ref '${RULES_REF}' has no review/assemble.sh: the review prompt moved there in v1.22.0. Use rules_ref v1, or a version from v1.22.0 on."
+            exit 1
+          fi
+          prompt="$(bash "$assemble" publish-pr.md)"
+          # A random delimiter: the prompt carries caller text (project_context), which must
+          # not be able to end the output early.
+          delim="PROMPT_$(openssl rand -hex 16)"
+          { echo "text<<${delim}"; printf '%s\n' "$prompt"; echo "${delim}"; } >> "$GITHUB_OUTPUT"
+          echo "Assembled a $(printf '%s' "$prompt" | wc -c | tr -d ' ')-byte prompt from rules_ref ${RULES_REF}"
 
       # The publish gate below needs to know what "new" means.
       - name: Mark the review start
@@ -465,99 +503,7 @@ jobs:
             --model ${{ steps.model.outputs.model }} --effort ${{ steps.model.outputs.effort }} --max-turns ${{ inputs.max_turns }}
             --allowedTools "Read,Glob,Grep,Write,Bash(gh api:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),mcp__github_comment__update_claude_comment"
             --disallowedTools "Agent,Task"
-          prompt: |
-            You are the cold-context reviewer for this pull request. You have not seen the
-            author's reasoning, and the PR description's justifications are not evidence.
-            Judge only what the code does.
-
-            ${{ inputs.project_context }}
-
-            Read `.shared-review-rules/review-rules/README.md` first: it indexes the
-            general Tin Bee rules and says when each applies. Read the ones that apply to
-            this diff -- reading all of them on a small diff wastes the budget that should
-            go on the code. Then read `${{ inputs.project_rules }}` if it exists, for this
-            project's own invariants, which add to the general rules rather than replacing
-            them.
-
-            The diff is already on disk: `.review-context/pr.diff`, with the changed file
-            names in `.review-context/files.txt`. Read those. Do NOT run `gh pr diff`
-            and do not try to redirect its output -- redirection is refused. A large diff
-            is cut off when it arrives as a tool result, so `Read` the file in ranges
-            (offset and limit) and keep going until you reach the end -- a diff you read
-            only the start of is a diff you did not review. If `pr.diff` is empty, the
-            diff was too large for GitHub to serve: review the files in `files.txt`
-            directly from the workspace and say in the summary that you had no diff.
-
-            Do the review yourself, in this session. Do not launch subagents or background
-            tasks: this run is headless, so a turn that ends while work is outstanding ends
-            the run, the work is discarded and nothing is posted. Do not end your turn
-            until the review has been posted.
-
-            Review the diff against those rules and against ordinary correctness.
-
-            Report only CONCRETE DEFECTS. For each: `file:line`, the failure scenario
-            (inputs or state -> wrong outcome), and the fix. Rank by severity. These come
-            first, in this order: cross-tenant reach, secrets in logs / URLs / responses,
-            TOCTOU across async boundaries, silently swallowed errors, unbounded reads,
-            unsafe migrations. Skip style and naming unless it hides a bug.
-
-            Two things to be careful about, because they cost a reviewer's credibility:
-            do not report a defect you have not traced to a concrete failure, and do not
-            assert a version- or config-specific fact without checking it in the repo --
-            a confidently wrong claim about a flag or a library version costs more than
-            the finding is worth. If a migration is included, quote every destructive
-            statement and say which expand/contract phase it is.
-
-            End with one line: "No further defects found" or "N defects" -- no
-            "above" or "below". The findings are anchored to their own lines as review
-            threads, so they sit beside the code and in neither direction from this
-            summary, and a directional word is simply wrong. It also drifts within a
-            single review: one pass wrote "Finding 2 below asks for a migration" in the
-            body and "3 defects above" to close, in the same comment. Refer to a finding
-            by its number and its `file:line`, never by where it is on the page.
-
-            PUBLISH THE REVIEW AS INLINE COMMENTS, not as one PR comment. Each finding
-            anchored to its own line becomes a review THREAD, which is what the reviewer
-            on the other end can reply to and resolve one finding at a time -- the same
-            loop Copilot findings already go through. A single comment carrying N
-            findings has no threads, so a repo whose branch protection requires thread
-            resolution cannot see it at all, and disagreeing with one finding means
-            dismissing all of them.
-
-            Write a JSON file to /tmp/review.json:
-
-              {
-                "event": "COMMENT",
-                "body": "<the summary: which rules you read, what you checked and found
-                         clean, and any finding that has no line to attach to -- a stale
-                         PR description, a migration already on main, a missing test.
-                         End with the one-line count.>",
-                "comments": [
-                  { "path": "apps/api/src/foo.ts", "line": 42, "side": "RIGHT",
-                    "body": "<one finding: the failure scenario and the fix>" }
-                ]
-              }
-
-            Then post it:
-
-              gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews \
-                --method POST --input /tmp/review.json
-
-            ANCHORING RULES -- the API rejects the WHOLE review if one comment is
-            misplaced, which throws away the entire run:
-              - `path` and `line` must name a line the diff actually touches. Get them
-                from `.review-context/pr.diff`; do not guess from reading the file.
-              - `side: "RIGHT"` for added or changed lines, `"LEFT"` only for a line the
-                diff removes.
-              - A finding you cannot anchor goes in `body`. Never invent a line to hang
-                it on.
-
-            IF THE POST FAILS, do not stop and do not retry the same payload. Move every
-            finding into `body` (keeping its file:line inline as text), set `comments` to
-            `[]`, and post again. If that also fails, fall back to
-            `gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/review.md`.
-            A review that is not published does not exist -- the job fails if nothing
-            appears.
+          prompt: ${{ steps.prompt.outputs.text }}
 
       # The action reports success when the MODEL finished, not when anything was
       # published. Without this gate a run can review for fifteen minutes, hit a denied

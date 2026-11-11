@@ -484,7 +484,7 @@ to the version on the repository's default branch` — when the PR's copy of the
 | `model_label_prefix` | `claude-review:`              | A label `<prefix><model>[:<effort>]` reviews that one PR with that model; `""` turns it off. See _Choosing a model_.                                                                                                                                                                                           |
 | `project_context`    | `""`                          | One or two sentences on what the service is and what language. Without it the model infers the domain from the diff.                                                                                                                                                                                           |
 | `project_rules`      | `docs/review-rules/README.md` | The caller's own invariants. Skipped when absent.                                                                                                                                                                                                                                                              |
-| `rules_ref`          | `v1`                          | Ref of this repo the shared `review-rules/` come from.                                                                                                                                                                                                                                                         |
+| `rules_ref`          | `v1`                          | Ref of this repo the shared `review-rules/` and the prompt in `review/` come from. From v1.22.0 on: an older ref has no `review/` and fails the job with that message.                                                                                                                                       |
 | `model`              | `opus`                        | Default model: the alias for the latest Opus, so the single `claude-review` label means Opus. A model label overrides it per PR. Was `claude-sonnet-5-5` (and `claude-opus-5` before v1.15.0).                                                                                                                 |
 | `effort`             | `high`                        | Default `--effort`: `low`, `medium`, `high`, `xhigh` or `max`; a model label can override it.                                                                                                                                                                                                                  |
 | `max_turns`          | `200`                         | A runaway guard, not a budget: the action fails a run that finishes past the cap after the review is already posted and paid for.                                                                                                                                                                              |
@@ -536,6 +536,14 @@ label and nothing else changes. Labels are per repository; the standard one is c
 `review-rules/` in this repository — one copy of each general Tin Bee rule, checked out
 beside the caller's code. Consumer repos keep only their own invariants. See
 [`review-rules/README.md`](review-rules/README.md) for the index and what each covers.
+
+#### The prompt, shared with local pre-flight reviews
+
+What the reviewer is told lives in [`review/`](review/README.md), not in this workflow:
+`core.md` plus an ending, joined by `review/assemble.sh`. This workflow uses the
+`publish-pr.md` ending (inline threads). A repo's local pre-flight (`make local-ci`, first in
+tinbee/woahbar) uses `local/return-structured.md` and the container in `review/local/`, so a
+review before the push and one on the PR are given the same instructions.
 
 ### `copilot-review.yml`
 
