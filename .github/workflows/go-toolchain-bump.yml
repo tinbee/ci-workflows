@@ -1,0 +1,265 @@
+# Reusable workflow: keep a Go module on the newest patch release of its Go minor.
+#
+# A Go patch release that fixes a standard-library vulnerability turns go-ci's
+# govulncheck red in every Go repo at once, on pull requests that did not cause it.
+# go-ci builds with exactly the version go.mod names, on purpose: that is the version
+# the release binary is built with, so a red scan is a real finding. The fix is the
+# same one-line bump every time. This workflow finds it and opens that pull request,
+# so a patch release is a PR to merge, not an investigation per repo.
+#
+# Only patch releases of the CURRENT minor. Moving to a new minor is a decision
+# (language changes, deprecations), so a newer minor is reported, never applied.
+#
+# Consumer repos call it on a schedule:
+#   on:
+#     schedule:
+#       - cron: "23 6 * * *"
+#     workflow_dispatch:
+#   jobs:
+#     bump:
+#       uses: tinbee/ci-workflows/.github/workflows/go-toolchain-bump.yml@v1
+#       with:
+#         app_client_id: Iv23...  # the bump App
+#         extra_files: Dockerfile
+#         auto_merge: true
+#       secrets:
+#         app_key: ${{ secrets.GO_BUMP_APP_KEY }}
+#
+# WHY A GITHUB APP. A pull request opened with the job's GITHUB_TOKEN triggers no
+# workflows, so its required checks never report and it sits BLOCKED with nothing red
+# to explain it. A pull request opened with an App's token runs CI like any other.
+
+name: Go toolchain bump (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      runs_on:
+        description: "The runner label. Empty means the caller's `CI_RUNS_ON` variable, then `ubuntu-latest`, as in go-ci."
+        type: string
+        default: ""
+      working_directory:
+        description: "Directory holding go.mod, relative to the repo root."
+        type: string
+        default: "."
+      extra_files:
+        description: >-
+          Paths, relative to the repo root and separated by spaces or newlines, that pin
+          the same Go version as go.mod: a Dockerfile's `ARG GO_VERSION=1.27.3`, a line
+          in CLAUDE.md. The old version is replaced with the new one in each. Every file
+          listed must contain the old version, or the run fails: a listed file that no
+          longer pins it means the list is stale, and a silent skip would leave the
+          Dockerfile building with the vulnerable Go.
+        type: string
+        default: ""
+      auto_merge:
+        description: >-
+          Turn on auto-merge for the pull request, so it merges once its required checks
+          pass. Needs "Allow auto-merge" in the repo's settings; without it this warns and
+          the pull request waits for a person.
+        type: boolean
+        default: false
+      merge_method:
+        description: "merge, squash or rebase, for auto_merge."
+        type: string
+        default: "merge"
+      app_client_id:
+        description: >-
+          Client ID (not the App ID) of a GitHub App installed on this repo with
+          Contents: write and Pull requests: write. Not a secret.
+        type: string
+        required: true
+    secrets:
+      app_key:
+        description: "Private key (PEM) of that App. The job mints a token for this one repo, revoked when the job ends."
+        required: true
+
+jobs:
+  bump:
+    name: bump
+    runs-on: ${{ inputs.runs_on || vars.CI_RUNS_ON || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    # The job's own token only reads; every write goes through the App's token, which is
+    # scoped to this repo.
+    permissions:
+      contents: read
+    steps:
+      - name: Repository name
+        id: repo
+        shell: bash
+        run: echo "name=${GITHUB_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
+
+      - name: App token
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ inputs.app_client_id }}
+          private-key: ${{ secrets.app_key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ steps.repo.outputs.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          token: ${{ steps.token.outputs.token }}
+
+      - name: Newest patch of this Go minor
+        id: version
+        working-directory: ${{ inputs.working_directory }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # The toolchain line, when there is one, is the version the go command builds
+          # with, so it is the one to move; otherwise the go line.
+          toolchain=$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)
+          go_line=$(awk '$1 == "go" { print $2 }' go.mod)
+          if [ -n "$toolchain" ]; then field=toolchain; old=$toolchain; else field=go; old=$go_line; fi
+          if [ -z "$old" ]; then
+            echo "::error::go.mod in '${PWD}' has neither a go nor a toolchain line."
+            exit 1
+          fi
+          # A pre-release (1.28rc1) has no patch releases to follow.
+          case "$old" in
+            *rc*|*beta*) echo "::notice::go.mod is on the pre-release ${old}; nothing to do."; echo "bump=false" >> "$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+          # The versions become sed patterns in the next step, so nothing else gets through.
+          if ! [[ "$old" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error::cannot read the Go version '${old}' in go.mod's ${field} line."
+            exit 1
+          fi
+
+          # go.dev names a minor's first release "go1.27", which is 1.27.0.
+          norm() { case "$1" in *.*.*) echo "$1" ;; *) echo "$1.0" ;; esac; }
+          current=$(norm "$old")
+          minor=${current%.*}
+
+          # go.dev, not setup-go's manifest: the manifest lags a release, and the release
+          # is exactly when this needs to see it.
+          releases=$(curl -fsS --retry 3 --max-time 30 'https://go.dev/dl/?mode=json&include=all')
+          stable=$(jq -r '.[] | select(.stable) | .version | ltrimstr("go")' <<< "$releases")
+          latest=""
+          while read -r v; do
+            case "$v" in "$minor"|"$minor".*) latest=$(printf '%s\n%s\n' "$latest" "$(norm "$v")" | sort -V | tail -1) ;; esac
+          done <<< "$stable"
+          if ! [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::go.dev lists no stable release of Go ${minor} (got '${latest}')."
+            exit 1
+          fi
+
+          newest=$(while read -r v; do norm "$v"; done <<< "$stable" | sort -V | tail -1)
+          if [ "${newest%.*}" != "$minor" ]; then
+            echo "::notice::Go ${newest} is out. Moving from ${minor} to a new minor is a deliberate change; this workflow only follows patch releases."
+          fi
+
+          if [ "$(printf '%s\n%s\n' "$current" "$latest" | sort -V | tail -1)" = "$current" ]; then
+            echo "Go ${current} is the newest ${minor} release; nothing to do."
+            echo "bump=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Go ${old} -> ${latest} (${field} line)."
+          {
+            echo "bump=true"
+            echo "field=${field}"
+            echo "old=${old}"
+            echo "new=${latest}"
+            echo "branch=go-toolchain/go${latest}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Edit, commit, open the pull request
+        if: steps.version.outputs.bump == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          APP_SLUG: ${{ steps.token.outputs.app-slug }}
+          FIELD: ${{ steps.version.outputs.field }}
+          OLD: ${{ steps.version.outputs.old }}
+          NEW: ${{ steps.version.outputs.new }}
+          BRANCH: ${{ steps.version.outputs.branch }}
+          WORK_DIR: ${{ inputs.working_directory }}
+          EXTRA_FILES: ${{ inputs.extra_files }}
+          AUTO_MERGE: ${{ inputs.auto_merge }}
+          MERGE_METHOD: ${{ inputs.merge_method }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$MERGE_METHOD" in
+            merge|squash|rebase) ;;
+            *) echo "::error::merge_method must be merge, squash or rebase, not '${MERGE_METHOD}'."; exit 1 ;;
+          esac
+
+          # One pull request per version. A run after it was opened (the next day's, or
+          # a manual one) finds the branch and stops, rather than opening a duplicate.
+          if git ls-remote --exit-code --heads origin "refs/heads/${BRANCH}" > /dev/null; then
+            echo "::notice::${BRANCH} already exists; its pull request is the open one."
+            exit 0
+          fi
+
+          # Dots are literal, and the version must not be followed by another digit or
+          # dot, so 1.27.3 matches neither 1.27.30 nor 1.27.3.1.
+          old_re=${OLD//./\\.}
+          if [ "$WORK_DIR" = . ]; then gomod=go.mod; else gomod="${WORK_DIR%/}/go.mod"; fi
+          if [ "$FIELD" = toolchain ]; then
+            sed -i -E "s/^toolchain go${old_re}\$/toolchain go${NEW}/" "$gomod"
+            want="toolchain go${NEW}"
+          else
+            sed -i -E "s/^go ${old_re}\$/go ${NEW}/" "$gomod"
+            want="go ${NEW}"
+          fi
+          if ! grep -qx "$want" "$gomod"; then
+            echo "::error::could not rewrite the ${FIELD} line of ${gomod} to '${want}'."
+            exit 1
+          fi
+
+          files="\`${gomod}\`"
+          for f in $EXTRA_FILES; do
+            if [ ! -f "$f" ]; then
+              echo "::error::extra_files names ${f}, which does not exist."
+              exit 1
+            fi
+            if ! grep -Eq "(^|[^0-9.])${old_re}([^0-9.]|\$)" "$f"; then
+              echo "::error::${f} does not contain Go ${OLD}. Either it pins the version some other way, or it has drifted from go.mod; fix it or drop it from extra_files."
+              exit 1
+            fi
+            sed -i -E "s/(^|[^0-9.])${old_re}([^0-9.]|\$)/\\1${NEW}\\2/g" "$f"
+            files="${files}, \`${f}\`"
+          done
+
+          # Commit as the App's bot user, so the history says what made the change.
+          uid=$(gh api "/users/${APP_SLUG}%5Bbot%5D" --jq .id)
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${uid}+${APP_SLUG}[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          git commit -a -q -m "build: Go ${NEW}" \
+            -m "A patch release of Go ${NEW%.*}, opened by go-toolchain-bump. Release notes: https://go.dev/doc/devel/release#go${NEW%.*}.minor"
+          git push -q origin "$BRANCH"
+
+          notes="https://go.dev/doc/devel/release#go${NEW%.*}.minor"
+          body=$(printf '%s\n' \
+            "Go ${OLD} → ${NEW}: a patch release of the Go ${NEW%.*} this repo is on." \
+            "" \
+            "- **Files:** ${files}." \
+            "- **Why:** Go patch releases are mostly security fixes in the standard library. go-ci's govulncheck fails on a reachable one, on every pull request, until this merges." \
+            "- **Release notes:** ${notes}" \
+            "" \
+            "Opened by [go-toolchain-bump](https://github.com/tinbee/ci-workflows/blob/main/.github/workflows/go-toolchain-bump.yml).")
+          url=$(gh pr create --head "$BRANCH" --title "build: Go ${NEW}" --body "$body")
+          echo "Opened ${url}"
+
+          # A pull request for an older patch that never merged is superseded: this one
+          # carries everything it did.
+          gh pr list --state open --json number,headRefName \
+            --jq '.[] | select(.headRefName | startswith("go-toolchain/go")) | "\(.number) \(.headRefName)"' \
+          | while read -r n head; do
+              if [ "$head" != "$BRANCH" ]; then
+                gh pr close "$n" --delete-branch --comment "Superseded by ${url}."
+              fi
+            done
+
+          if [ "$AUTO_MERGE" = true ]; then
+            if ! out=$(gh pr merge "$url" --auto "--${MERGE_METHOD}" 2>&1); then
+              echo "::warning::could not turn on auto-merge, so ${url} waits for a person: ${out}"
+            fi
+          fi
