@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["findings", "rules_read", "summary"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file", "line", "severity", "summary", "failure_scenario", "fix"],
+        "properties": {
+          "file": { "type": "string" },
+          "line": { "type": "integer", "minimum": 0 },
+          "severity": { "enum": ["blocking", "minor"] },
+          "summary": { "type": "string" },
+          "failure_scenario": { "type": "string" },
+          "fix": { "type": "string" }
+        }
+      }
+    },
+    "rules_read": { "type": "array", "items": { "type": "string" } },
+    "summary": { "type": "string" }
+  }
+}
