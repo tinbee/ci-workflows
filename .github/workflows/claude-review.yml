@@ -396,6 +396,14 @@ jobs:
         if: env.ELIGIBLE == 'true' && steps.ci.outputs.result == 'success'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # The PR is untrusted and may commit its own .shared-review-rules/ or .review-context/.
+      # A .review-context/pr.diff symlinked into .shared-review-rules/ would make the diff
+      # step below write the PR's own text over a trusted file, and so into the prompt.
+      # These two paths belong to this job: clear them before anything is put there.
+      - name: Clear the paths the review owns
+        if: env.ELIGIBLE == 'true' && steps.ci.outputs.result == 'success'
+        run: rm -rf -- .shared-review-rules .review-context
+
       # The shared rules, beside the caller's code, sparse so the rest of this repo's
       # workflows are not dragged into the review's workspace.
       - name: Checkout the shared review rules

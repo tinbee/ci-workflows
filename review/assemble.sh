@@ -9,9 +9,18 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
-ending="${1:?usage: assemble.sh <ending.md>}"
-[ -f "$ending" ] || ending="$here/$ending"
-[ -f "$ending" ] || { echo "assemble.sh: no ending file $1" >&2; exit 1; }
+name="${1:?usage: assemble.sh <ending.md>}"
+# The ending is looked up next to this script ONLY, never relative to the working directory:
+# both callers run inside the change under review (the PR checkout, the commit), and a file
+# there named like an ending replaced the trusted instructions with its own.
+case "$name" in
+  /* | *..*)
+    echo "assemble.sh: the ending must be a path inside review/, got: $name" >&2
+    exit 1
+    ;;
+esac
+ending="$here/$name"
+[ -f "$ending" ] || { echo "assemble.sh: no ending $name in $here" >&2; exit 1; }
 
 # `&` in a replacement would expand to the match under bash 5.2's patsub_replacement.
 shopt -u patsub_replacement 2>/dev/null || true

@@ -18,8 +18,17 @@ git fetch -q "$in/repo.bundle" '+refs/*:refs/bundle/*'
 git -c advice.detachedHead=false checkout -q "$SHA"
 
 # The same layout claude-review.yml gives the cloud review, so the prompt's paths hold in both.
+# The commit is untrusted and may carry its own copies of these paths (a fake rules index, a
+# pr.diff symlinked somewhere). Remove them first, so the trusted copies replace them; with
+# the directory already present, `mv` would nest the real rules beside the commit's.
+for p in .shared-review-rules .review-context; do
+  if [ -e "$p" ] || [ -L "$p" ]; then
+    echo "the commit has its own $p; replacing it" >&2
+    rm -rf -- "$p"
+  fi
+done
 mkdir -p .shared-review-rules .review-context
-mv "$in/review-rules" .shared-review-rules/
+mv "$in/review-rules" .shared-review-rules/review-rules
 git diff "$BASE...$SHA" > .review-context/pr.diff
 git diff --name-only "$BASE...$SHA" > .review-context/files.txt
 echo "reviewing $(wc -l < .review-context/pr.diff) diff lines across $(wc -l < .review-context/files.txt) files" >&2
