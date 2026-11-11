@@ -33,4 +33,4 @@ if ! git -C "$ciw" archive "$ref" local-ci review review-rules .github/workflows
   echo "local-ci: $ref of $ciw has no local-ci/ (it is v1.23.0+)" >&2
   exit 3
 fi
-LOCAL_CI_SHARED="$shared" "$shared/local-ci/run.sh" "$@"
+LOCAL_CI_SHARED="$shared" bash "$shared/local-ci/run.sh" "$@"
