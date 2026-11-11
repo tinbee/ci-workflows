@@ -30,7 +30,11 @@ RUN if [ "$GOVULNCHECK" = true ]; then GOBIN=/usr/local/bin go install golang.or
 
 # local: a toolchain mismatch should fail, not download.
 ENV GOTOOLCHAIN=local
-RUN useradd -m ci && mkdir -p /home/ci/.cache/go-build && chown -R ci /home/ci
+# The image's GOPATH (/go) belongs to root, and the checks run as `ci`: modules are unpacked
+# here, from the read-only file proxy, fresh each run (an unpacked module is not re-verified
+# against go.sum, so a cache the commit's code could write to is not kept between runs).
+ENV GOPATH=/home/ci/go
+RUN useradd -m ci && mkdir -p /home/ci/.cache/go-build /home/ci/go && chown -R ci /home/ci
 COPY --chmod=755 go-checks.sh /opt/local-ci/go-checks.sh
 
 USER ci
