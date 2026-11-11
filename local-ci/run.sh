@@ -197,8 +197,6 @@ ns="local-ci-$repo_name-$$"
 cleanup() {
   docker ps -aq --filter "label=local-ci.run=$ns" | xargs docker rm -f >/dev/null 2>&1 || true
   docker network rm "$ns" "$ns-review" >/dev/null 2>&1 || true
-  git update-ref -d "refs/local-ci/$ns/head" 2>/dev/null || true
-  git update-ref -d "refs/local-ci/$ns/base" 2>/dev/null || true
   rm -rf "$work"
 }
 trap cleanup EXIT
@@ -216,14 +214,22 @@ write_result() { # <status> <checks exit> <review json or null> <envelope json o
     > "$out/result.json"
 }
 
-# --- inputs: the commit as a bundle, plus what each container needs beside it -----------------
+# --- inputs: the commit's files and diff, plus what each container needs beside them ----------
+# By tree, not by history: a shallow clone (instastack's is) cannot bundle a commit whose
+# parents it lacks. read-tree + checkout-index run no hooks and, unlike `git archive`, drop
+# nothing marked export-ignore.
+export_tree() { # <commit> <dir>
+  local idx="$work/index"
+  GIT_INDEX_FILE="$idx" git read-tree "$1"
+  GIT_INDEX_FILE="$idx" git checkout-index -a -f --prefix="$2/"
+  rm -f "$idx"
+}
 mkdir -p "$work/checks" "$work/review"
-# A bundle carries refs, not bare SHAs, so the commit and its base get short-lived refs.
-git update-ref "refs/local-ci/$ns/head" "$sha"
-git update-ref "refs/local-ci/$ns/base" "$base"
-git bundle create -q "$work/checks/repo.bundle" "refs/local-ci/$ns/head" "refs/local-ci/$ns/base" \
-  || die "could not bundle $sha"
-cp "$work/checks/repo.bundle" "$work/review/repo.bundle"
+export_tree "$sha" "$work/tree" || die "could not export the files of $sha"
+cp -R "$work/tree" "$work/checks/tree"
+cp -R "$work/tree" "$work/review/tree"
+git diff "$base" "$sha" > "$work/review/pr.diff"
+git diff --name-only "$base" "$sha" > "$work/review/files.txt"
 printf '%s\n' "$inputs" > "$work/checks/inputs.json"
 cp -R "$shared/review-rules" "$work/review/"
 git show "$sha:.github/workflows/claude-review.yml" 2>/dev/null \
@@ -238,11 +244,10 @@ git show "$sha:.github/workflows/claude-review.yml" 2>/dev/null \
 module_flags=()
 if ! git cat-file -e "$sha:$wd/vendor/modules.txt" 2>/dev/null; then
   command -v go >/dev/null || die "go is not installed on the host, and ${sha:0:12} is not vendored"
-  mkdir -p "$work/src" "$GOMODCACHE_HOST"
-  git archive "$sha" | tar -x -C "$work/src"
+  mkdir -p "$GOMODCACHE_HOST"
   goprivate="$(input goprivate)"
   echo "local-ci: fetching modules on the host into $GOMODCACHE_HOST" >&2
-  (cd "$work/src/$wd" && GOMODCACHE="$GOMODCACHE_HOST" GOWORK=off GOFLAGS=-mod=mod \
+  (cd "$work/tree/$wd" && GOMODCACHE="$GOMODCACHE_HOST" GOWORK=off GOFLAGS=-mod=mod \
     GOPRIVATE="${goprivate:-${GOPRIVATE:-}}" go mod download) > "$out/modules.log" 2>&1 \
     || { tail -20 "$out/modules.log" >&2; die "could not download ${sha:0:12}'s modules on the host (log: $out/modules.log)"; }
   module_flags=(-v "$GOMODCACHE_HOST/cache/download:/goproxy:ro"

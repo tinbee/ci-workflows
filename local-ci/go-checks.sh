@@ -10,7 +10,7 @@
 #   private modules  run.sh pre-fetches them on the host; this container reads them from a
 #                    read-only file proxy, checked against go.sum, and holds no credential.
 #
-# stdin: a tar of repo.bundle (a ref to $SHA) and inputs.json (go-ci's inputs, plus `after`).
+# stdin: a tar of tree/ (the files of $SHA) and inputs.json (go-ci's inputs, plus `after`).
 set -euo pipefail
 
 in=/tmp/in
@@ -18,11 +18,15 @@ mkdir -p "$in"
 # macOS tar adds xattr headers (com.apple.provenance) that GNU tar warns about, once per file.
 tar --warning=no-unknown-keyword -xf - -C "$in"
 
-mkdir -p ~/work/repo
+mkdir -p ~/work
+mv "$in/tree" ~/work/repo
 cd ~/work/repo
+# A one-commit repository of exactly those files, so `git diff` (the generated-code check) and
+# `git ls-files` behave as on a checkout. -f: a tracked file that also matches .gitignore is
+# still part of the commit.
 git init -q
-git fetch -q "$in/repo.bundle" '+refs/*:refs/bundle/*'
-git -c advice.detachedHead=false checkout -q "$SHA"
+git add -A -f
+git -c user.name=local-ci -c user.email=local-ci@localhost commit -q --no-verify -m "$SHA"
 root="$PWD"
 
 input() { jq -r --arg k "$1" '.[$k] // "" | tostring' "$in/inputs.json"; }

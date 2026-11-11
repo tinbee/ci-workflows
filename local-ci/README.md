@@ -41,7 +41,7 @@ structured ending, the shared `review-rules/` and the caller's `project_context`
 | network | `--internal`; a proxy allows `checks-allow.txt` (buf.build for remote buf plugins, vuln.go.dev for govulncheck) | `--internal`; a proxy allows `api.anthropic.com` |
 | modules | pre-fetched **on the host** with its own credentials, mounted read-only as `GOPROXY=file://`, checked against go.sum | none |
 | credentials | none | the Claude token only |
-| tools | Read/Glob/Grep only, none of the commit's own Claude config | |
+| tools | Go at go.mod's version, and buf, sqlc, golangci-lint, govulncheck as ci.yml asks | Read/Glob/Grep; none of the commit's own Claude config |
 
 The token (`LOCAL_CI_CLAUDE_TOKEN`, a `claude setup-token` token) reaches only the review
 container, as `CLAUDE_CODE_OAUTH_TOKEN`. Never export it under that name on the host: it
