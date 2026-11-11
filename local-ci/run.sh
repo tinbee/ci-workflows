@@ -39,6 +39,11 @@ die() {
   exit 3
 }
 
+# macOS tar writes an AppleDouble `._name` beside every file with extended attributes, and a
+# checkout has them (com.apple.provenance). In the container they are real files: buf tried to
+# compile `._agent.proto`. This stops tar writing them; elsewhere it is ignored.
+export COPYFILE_DISABLE=1
+
 results="$(cd "$(git rev-parse --git-common-dir)" && pwd)/local-ci"
 
 cmd=run
