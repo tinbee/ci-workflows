@@ -452,6 +452,7 @@ jobs:
           ${{ inputs.test_command }}
 
       - name: Known vulnerabilities in reachable code
+        id: vuln
         if: inputs.govulncheck
         uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1
         with:
@@ -466,6 +467,49 @@ jobs:
           work-dir: ${{ inputs.working_directory }}
           # See setup-go: no Actions cache with private modules.
           cache: ${{ inputs.goprivate == '' }}
+
+      # When the scan fails, say whether a newer Go is the fix. A Go patch release that
+      # fixes a standard-library vulnerability turns this red in every Go repo at once,
+      # on pull requests that did not cause it, and the trace above does not say that
+      # the fix is the version in go.mod. Diagnostic only: it runs after the failure and
+      # cannot turn the job green, so it never errors out itself.
+      - name: Is the fix a newer Go?
+        if: failure() && steps.vuln.outcome == 'failure'
+        working-directory: ${{ inputs.working_directory }}
+        env:
+          VERSION_FILE: ${{ inputs.go_version_file }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          # The action installed it here, with the Go this job set up.
+          gv="$(go env GOPATH)/bin/govulncheck"
+          if [ ! -x "$gv" ]; then
+            echo "govulncheck is not at ${gv}; no diagnosis."
+            exit 0
+          fi
+          # JSON output exits 0 whatever it finds. A finding is reachable when its
+          # trace's first frame names a function.
+          reachable=$("$gv" -format json ./... 2>/dev/null \
+            | jq -s '[.[] | .finding? | select(. != null and .trace[0].function != null)]' 2>/dev/null)
+          if [ -z "$reachable" ] || [ "$(jq length <<< "$reachable")" = 0 ]; then
+            echo "No reachable finding in govulncheck's JSON; no diagnosis."
+            exit 0
+          fi
+          in_deps=$(jq '[.[] | select(.trace[0].module != "stdlib") | .osv] | unique | length' <<< "$reachable")
+          unfixed=$(jq '[.[] | select(.trace[0].module == "stdlib" and (.fixed_version // "") == "") | .osv] | unique | length' <<< "$reachable")
+          fixed_in=$(jq -r '.[] | select(.trace[0].module == "stdlib") | .fixed_version // empty | ltrimstr("v")' <<< "$reachable" | sort -V | tail -1)
+          stdlib=$(jq -r '[.[] | select(.trace[0].module == "stdlib") | .osv] | unique | join(", ")' <<< "$reachable")
+
+          if [ -z "$fixed_in" ]; then
+            echo "No standard-library finding has a fix; the findings above are in dependencies or unfixed."
+            exit 0
+          fi
+          bump="Bump the Go version in ${VERSION_FILE} (its toolchain line if it has one, else its go line) to ${fixed_in}, and anything else that pins it, such as a Dockerfile. If this repo calls go-toolchain-bump.yml, that pull request is opened for you; run the workflow by hand to have it now."
+          if [ "$in_deps" = 0 ] && [ "$unfixed" = 0 ]; then
+            echo "::error title=Fixed by a newer Go::Every reachable vulnerability is in the Go standard library (${stdlib}) and Go ${fixed_in} fixes it. ${bump}"
+          else
+            echo "::error title=Partly fixed by a newer Go::Go ${fixed_in} fixes the standard-library findings (${stdlib}). ${in_deps} more are in dependencies and ${unfixed} in the standard library have no fix yet; those need their own change. ${bump}"
+          fi
 
       - name: Post-command
         if: inputs.post_command != ''

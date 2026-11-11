@@ -31,6 +31,7 @@
   "workflows": {
     "node-pnpm-ci.yml": { "jobs": ["CI"], "gate": true, "expects": { "file": "pnpm-lock.yaml" } },
     "go-ci.yml": { "jobs": ["CI"], "gate": true, "expects": { "language": "Go" } },
+    "go-toolchain-bump.yml": { "jobs": ["bump"], "gate": false },
     "pr-scope-guard.yml": { "jobs": ["pr-scope-guard"], "gate": true },
     "db-migration-callout.yml": { "jobs": ["callout"], "gate": false },
     "claude-review.yml": { "jobs": ["review"], "gate": false, "expects": { "always": true } },

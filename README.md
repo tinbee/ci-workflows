@@ -368,6 +368,93 @@ re-PUT it, or every check goes green and every PR stays blocked with nothing red
 explain it. A drift guard comparing the ruleset file against what the workflow reports
 belongs in the caller — see instastack's `ci.yml`.
 
+#### When govulncheck fails on the Go version
+
+go-ci builds and scans with exactly the Go version `go.mod` names, because that is the
+version the release binary is built with. So when a Go patch release fixes a
+standard-library vulnerability, govulncheck fails in every Go repo at once, on pull
+requests that did not cause it. After a failed scan, the step **Is the fix a newer Go?**
+re-reads govulncheck's findings and says so in an error annotation:
+
+- **Every reachable finding is in the standard library** and a newer Go fixes it: it names
+  the version to move to.
+- **Some are in dependencies or unfixed:** it says which part a newer Go fixes and what
+  needs its own change.
+
+It is diagnostic only: it runs after the failure and cannot turn the job green.
+`go-toolchain-bump.yml`, below, opens the pull request that does.
+
+### `go-toolchain-bump.yml`
+
+Keeps a Go module on the newest patch release of its Go minor. Run daily, it reads
+go.dev's release list. When `go.mod` is behind, it opens a pull request that moves the
+`toolchain` line, or the `go` line when there is no `toolchain`, plus every file listed
+in `extra_files`. With `auto_merge`, the pull request merges once its required checks
+pass, so a Go security release needs nobody.
+
+- **Patch releases only.** A newer minor is reported as a notice, never applied: moving
+  from 1.27 to 1.28 is a decision.
+- **One pull request per version.** A later run finds the branch and stops. A newer patch
+  closes the older, unmerged pull request as superseded.
+- **A listed file that no longer contains the old version fails the run.** It means the
+  list is stale, and skipping the file would leave, say, the Dockerfile building with the
+  vulnerable Go.
+
+#### Caller example
+
+```yaml
+name: Go toolchain
+
+on:
+  schedule:
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    uses: tinbee/ci-workflows/.github/workflows/go-toolchain-bump.yml@v1
+    with:
+      app_client_id: Iv23...  # the org's go-bump App
+      extra_files: Dockerfile CLAUDE.md
+      auto_merge: true
+    secrets:
+      app_key: ${{ secrets.GO_BUMP_APP_KEY }}
+```
+
+#### Inputs
+
+| Input               | Default   | Notes                                                                                                                                                  |
+| ------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `app_client_id`     | required  | Client ID of the go-bump App (below). Not secret.                                                                                                      |
+| `working_directory` | `.`       | Directory holding `go.mod`.                                                                                                                            |
+| `extra_files`       | `""`      | Paths from the repo root, separated by spaces or newlines, that pin the same version (`ARG GO_VERSION=1.27.3`). Each must contain the old version.      |
+| `auto_merge`        | `false`   | Turn on auto-merge for the pull request. Needs "Allow auto-merge" in the repo's settings; without it the run warns and the pull request waits.          |
+| `merge_method`      | `merge`   | `merge`, `squash` or `rebase`, for `auto_merge`.                                                                                                       |
+| `runs_on`           | `""`      | As in go-ci.                                                                                                                                           |
+
+#### Secrets
+
+| Secret    | Required | Notes                                                                                     |
+| --------- | -------- | ----------------------------------------------------------------------------------------- |
+| `app_key` | yes      | PEM private key of the go-bump App. The job mints a token for this one repo and revokes it. |
+
+#### The App
+
+A pull request opened with the job's own `GITHUB_TOKEN` starts no workflows. Its required
+checks would never report, and it would sit `BLOCKED` with nothing red. A pull request
+opened with an App's token runs CI like any other, so the workflow needs an App:
+
+- **Permissions:** Contents read and write, Pull requests read and write, no webhook.
+- **Installation:** on the Go repos of its own org. An App limited to one account can't be
+  installed on another, so each org (tinbee, instastack) has its own go-bump App.
+- **Each consumer:** the key as a repo secret, `gh secret set GO_BUMP_APP_KEY -R <repo> < key.pem`,
+  plus "Allow auto-merge" in the repo's settings if it passes `auto_merge`.
+
+Unlike `tinbee-go-modules`, this App **is** installed on the consumer, because it writes to it.
+
 ### `pr-scope-guard.yml`
 
 Fails a PR that carries commits belonging to another **open** PR against the same base,
