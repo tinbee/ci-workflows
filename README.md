@@ -628,9 +628,16 @@ beside the caller's code. Consumer repos keep only their own invariants. See
 
 What the reviewer is told lives in [`review/`](review/README.md), not in this workflow:
 `core.md` plus an ending, joined by `review/assemble.sh`. This workflow uses the
-`publish-pr.md` ending (inline threads). A repo's local pre-flight (`make local-ci`, first in
-tinbee/woahbar) uses `local/return-structured.md` and the container in `review/local/`, so a
-review before the push and one on the PR are given the same instructions.
+`publish-pr.md` ending (inline threads). A repo's local pre-flight (`make local-ci`) uses
+`local/return-structured.md` and the container in `review/local/`, so a review before the
+push and one on the PR are given the same instructions.
+
+### `local-ci/` (not a workflow)
+
+A go-ci.yml caller's CI checks, then this review, run on a commit **before it is pushed**, in
+throwaway containers: [`local-ci/README.md`](local-ci/README.md). It mirrors go-ci.yml's steps
+from the caller's own `ci.yml`, so it cannot drift from CI; a repo adds `.local-ci.yml` and the
+`scripts/local-ci.sh` shim. In tinbee/woahbar and instastack/instastack.
 
 ### `copilot-review.yml`
 
