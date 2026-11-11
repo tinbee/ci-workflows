@@ -29,7 +29,8 @@ git add -A -f
 git -c user.name=local-ci -c user.email=local-ci@localhost commit -q --no-verify -m "$SHA"
 root="$PWD"
 
-input() { jq -r --arg k "$1" '.[$k] // "" | tostring' "$in/inputs.json"; }
+# Not `.[$k] // ""`: jq's `//` treats false as missing.
+input() { jq -r --arg k "$1" '.[$k] | if . == null then "" else tostring end' "$in/inputs.json"; }
 
 # go-ci sets env_json before anything else. Variables run.sh already set (from
 # .local-ci.yml `env`) win: env_json carries CI's hostnames, such as a Postgres on 127.0.0.1.

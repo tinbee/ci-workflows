@@ -209,7 +209,8 @@ fi
 after="$(jq -r '.after // ""' <<<"$cfg")"
 [ -z "$after" ] || must_be_relative_path "after" "$after"
 inputs="$(jq -n --argjson d "$defaults" --argjson w "$with" --arg after "$after" '$d + $w + {after: $after}')"
-input() { jq -r --arg k "$1" '.[$k] // "" | tostring' <<<"$inputs"; }
+# Not `.[$k] // ""`: jq's `//` treats false as missing, so go-ci's `buf: false` came back "".
+input() { jq -r --arg k "$1" '.[$k] | if . == null then "" else tostring end' <<<"$inputs"; }
 
 # These reach a Dockerfile's RUN lines (as build args), an image tag and git paths.
 must_match "buf" "$(input buf)" '^(true|false)$'
