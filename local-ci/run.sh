@@ -104,7 +104,10 @@ if [ "$cmd" = install-hook ]; then
   hook="$(cd "$hooks" && pwd)/pre-push"
   # A repo that sets core.hooksPath to a directory in its own tree (instastack's .githooks)
   # versions its hooks: the shim belongs there as a committed file, not written by this.
+  # Inside the git dir (the usual .git/hooks) is not that case, though .git is in the tree.
+  gitdir="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
   case "$hook" in
+    "$gitdir"/*) ;;
     "$(git rev-parse --show-toplevel)"/*)
       die "this repo keeps its hooks in $(dirname "$hook") (core.hooksPath); commit a pre-push there that runs: exec \"\$(git rev-parse --show-toplevel)/scripts/local-ci.sh\" pre-push \"\$@\""
       ;;
