@@ -14,10 +14,11 @@ ref="${LOCAL_CI_RULES_REF:-v1}"
 ciw="${LOCAL_CI_RULES_REPO:-}"
 if [ -z "$ciw" ]; then
   for c in "$top/../ci-workflows" "$top/../../tinbee/ci-workflows" "$HOME/workspace/tinbee/ci-workflows"; do
-    if [ -d "$c/.git" ]; then ciw="$c"; break; fi
+    # -e, not -d: in a worktree or a --separate-git-dir checkout, .git is a file.
+    if [ -e "$c/.git" ]; then ciw="$c"; break; fi
   done
 fi
-if [ -z "$ciw" ] || [ ! -d "$ciw/.git" ]; then
+if [ -z "$ciw" ] || [ ! -e "$ciw/.git" ]; then
   echo "local-ci: no tinbee/ci-workflows checkout found; clone it or set LOCAL_CI_RULES_REPO" >&2
   exit 3
 fi
@@ -25,8 +26,11 @@ fi
 # v1 floats: refresh it, so this runs what the label review runs today. This also runs in the
 # pre-push hook, so it must not hang a push: no prompts, and a bounded stall over HTTPS
 # (lowSpeedLimit/Time) and SSH (connect and keepalive timeouts). On failure, the local copy.
+# The timeouts are added to the ssh command git would use anyway (GIT_SSH_COMMAND, else
+# core.sshCommand), since GIT_SSH_COMMAND would otherwise replace a configured one.
+ssh_cmd="${GIT_SSH_COMMAND:-$(git -C "$ciw" config core.sshCommand 2>/dev/null || echo ssh)}"
 if ! GIT_TERMINAL_PROMPT=0 \
-  GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2" \
+  GIT_SSH_COMMAND="$ssh_cmd -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2" \
   git -C "$ciw" -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=10 \
   fetch -q --force origin "refs/tags/$ref:refs/tags/$ref" 2>/dev/null; then
   echo "local-ci: could not refresh $ref of $ciw; using the local copy" >&2
