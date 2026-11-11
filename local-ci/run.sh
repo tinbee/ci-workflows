@@ -326,13 +326,25 @@ t0=$SECONDS
 docker network create --internal "$ns" >/dev/null
 start_proxy "$ns" "$ns-proxy" "$shared/local-ci/checks-allow.txt"
 
-env_pairs() { # <jq path to an object>: KEY=value lines, keys checked
-  local kv
-  while IFS= read -r kv; do
-    [ -n "$kv" ] || continue
-    must_match "env name" "${kv%%=*}" '^[A-Za-z_][A-Za-z0-9_]*$'
-    printf '%s\n' "$kv"
-  done < <(jq -r --arg n "${2:-}" "$1"' // {} | to_entries[] | "\(.key)=\(.value)"' <<<"$cfg")
+# .local-ci.yml env as `docker run -e` flags, into env_flags. Split on lines, a
+# value `"x\nLOCAL_CI_CLAUDE_TOKEN"` became a bare `-e LOCAL_CI_CLAUDE_TOKEN`, which docker
+# fills from THIS shell's environment: the token, into the container that runs the commit.
+# So jq itself refuses a key that is not a name and a value with a newline, CR or NUL, and
+# emits NUL-separated pairs; they go through a file so a jq refusal stops the run rather
+# than ending a loop early. Every pair must still contain `=`.
+env_flags_from() { # <jq path to an object> [<value for $n in the path>]
+  local kv file="$work/env-pairs"
+  env_flags=()
+  jq -j --arg n "${2:-}" "$1"' // {} | to_entries[]
+    | if (.key | test("^[A-Za-z_][A-Za-z0-9_]*$"))
+         and ((.value | tostring) | test("[\n\r\u0000]") | not)
+      then "\(.key)=\(.value | tostring)\u0000"
+      else error("env \(.key | tojson): must be a NAME with a value on one line")
+      end' <<<"$cfg" > "$file" || die ".local-ci.yml: an env entry is not NAME: one-line value"
+  while IFS= read -r -d '' kv; do
+    [[ "$kv" == *=* ]] || die ".local-ci.yml: env entry without '=': $kv"
+    env_flags+=(-e "$kv")
+  done < "$file"
 }
 
 no_proxy=localhost,127.0.0.1
@@ -341,11 +353,8 @@ while IFS=$'\t' read -r name image; do
   must_match "service name" "$name" "$name_re"
   # Positional after the flags, so an image starting with `-` would be read as one.
   must_match "service image" "$image" '^[A-Za-z0-9][A-Za-z0-9._/:@-]*$'
-  env_flags=()
   # shellcheck disable=SC2016 # $n is a jq variable, bound by --arg
-  while IFS= read -r kv; do
-    env_flags+=(-e "$kv")
-  done < <(env_pairs '.services[$n].env' "$name")
+  env_flags_from '.services[$n].env' "$name"
   docker run -d --label "local-ci.run=$ns" --name "$ns-$name" --network "$ns" --network-alias "$name" \
     ${env_flags[@]+"${env_flags[@]}"} "$image" >/dev/null
   no_proxy="$no_proxy,$name"
@@ -361,10 +370,7 @@ while IFS=$'\t' read -r name image; do
   fi
 done < <(jq -r '.services // {} | to_entries[] | "\(.key)\t\(.value.image)"' <<<"$cfg")
 
-env_flags=()
-while IFS= read -r kv; do
-  env_flags+=(-e "$kv")
-done < <(env_pairs '.env')
+env_flags_from '.env'
 
 # No build cache kept between runs: the commit's code can write to it, and Go trusts a cache
 # entry by its key, so one commit could plant a result a later commit's build would use.
