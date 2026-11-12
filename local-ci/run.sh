@@ -124,11 +124,13 @@ if [ "$cmd" = install-hook ]; then
 # Installed by local-ci install-hook (tinbee/ci-workflows local-ci/run.sh). Runs the pushing
 # worktree's own scripts/local-ci.sh, so removing a worktree cannot leave it dangling.
 h="$(git rev-parse --show-toplevel)/scripts/local-ci.sh"
-if [ ! -x "$h" ]; then
+if [ ! -f "$h" ]; then
   echo "local-ci: this branch has no scripts/local-ci.sh, so the push is not checked" >&2
   exit 0
 fi
-exec "$h" pre-push "$@"
+# By bash, not by the file's mode: a copy that lost its executable bit must not switch the
+# check off.
+exec bash "$h" pre-push "$@"
 EOF
   chmod +x "$hook"
   echo "local-ci: pre-push installed at $hook"
