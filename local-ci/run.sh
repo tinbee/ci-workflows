@@ -437,8 +437,8 @@ fetch_modules() { # for the job in $wd and $inputs; sets module_flags
     # An exact version, so the container can resolve it from the cache with no listing.
     must_match "go run/install target" "$tool" '^[A-Za-z0-9][A-Za-z0-9._~/-]*@v[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.+-]*)?$'
     tools+=("$tool")
-  done < <(grep -oE 'go +(run|install) +[^[:space:]-][^[:space:]]*@[^[:space:]);&|"'"'"']+' "$work/commands.txt" \
-    | awk '{ print $NF }' | sort -u || true)
+  done < <(grep -oE 'go +(run|install) +(-[^[:space:]]+ +)*["'"'"']?[^[:space:]"'"'"'-][^[:space:]"'"'"']*@[^[:space:]);&|"'"'"']+' \
+    "$work/commands.txt" | awk '{ print $NF }' | tr -d "\"'" | sort -u || true)
   [ ${#mods[@]} -gt 0 ] || [ ${#tools[@]} -gt 0 ] || return 0
 
   command -v go >/dev/null || die "go is not installed on the host, which fetches ${sha:0:12}'s modules"
