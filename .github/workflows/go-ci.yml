@@ -369,8 +369,9 @@ jobs:
       # (the private modules' SOURCE) and the build cache compiled from it, and a cache
       # can be restored by any workflow run in the repo -- including a pull request from
       # a fork on a public caller, and people who can push to the caller but cannot read
-      # the private repo. Three steps cache, and all three are switched off together:
-      # this one, the setup-go inside govulncheck-action, and golangci-lint's own cache.
+      # the private repo. Two steps cache, and both are switched off together: this one
+      # and golangci-lint's own cache. (The setup-go inside govulncheck-action never
+      # caches; see that step.)
       # The cost is a cold module download on each run, for repos with private modules.
       #
       # This step resolves the Go version once: go.mod's toolchain line if it has one,
@@ -471,8 +472,11 @@ jobs:
           go-version-input: ${{ steps.go.outputs.go-version }}
           go-package: ./...
           work-dir: ${{ inputs.working_directory }}
-          # See setup-go: no Actions cache with private modules.
-          cache: ${{ inputs.goprivate == '' }}
+          # Never: the setup-go step above already restored this module cache and build
+          # cache, under the same key, so restoring them again only untars over files
+          # that exist -- thousands of `tar: ... File exists` errors per run, burying
+          # real annotations. It also leaves nothing for private modules to leak.
+          cache: false
 
       # When the scan fails, say whether a newer Go is the fix. A Go patch release that
       # fixes a standard-library vulnerability turns this red in every Go repo at once,
