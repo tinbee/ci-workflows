@@ -29,7 +29,9 @@ go-ci's steps in go-ci's order (generate + drift check, lint, golangci-lint, gof
 with `-count=1`, govulncheck, post), with the inputs the commit's `ci.yml` passes over
 go-ci.yml's own defaults at `v1`. Then the job's `after` script, for what its `ci.yml` runs
 outside go-ci. One job at a time, in ci.yml's order, each in its own container with its own
-services and network, stopping at the first that fails. `result.json` has each job under
+services and network, stopping at the first that fails. A job's services share its checks
+container's network namespace, so they are on `127.0.0.1` as a GitHub job's are, and also
+reachable by their names. `result.json` has each job under
 `checks.jobs`, as `{exit, seconds}` or `{skipped: <reason>}`. Not run locally:
 
 - **`pre_command`**: CI's machine setup (woahbar and Foliot start Postgres with it).
@@ -71,7 +73,7 @@ replaces the login of every interactive `claude`.
    ```yaml
    jobs:
      go:                        # a ci.yml job that calls go-ci.yml ({} or empty: no settings)
-       services:                # on this job's network, reachable by name
+       services:                # at 127.0.0.1, as in CI, and by name; one port each
          postgres:
            image: postgres:17
            env: { POSTGRES_USER: app, POSTGRES_PASSWORD: app, POSTGRES_DB: app_test }

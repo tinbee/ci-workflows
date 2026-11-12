@@ -471,6 +471,7 @@ fetch_modules() { # for the job in $wd and $inputs; sets module_flags
 # image, its services on a network of its own, then its checks. Sets job_exit.
 run_go_job() {
   local net="$ns-job-$job" name image ready ok after checks_image no_proxy=localhost,127.0.0.1
+  local names=() images=() aliases=() i
   after="$(input after)"
   state modules
   fetch_modules
@@ -497,10 +498,23 @@ run_go_job() {
     must_match "service name" "$name" "$name_re"
     # Positional after the flags, so an image starting with `-` would be read as one.
     must_match "service image" "$image" '^[A-Za-z0-9][A-Za-z0-9._/:@-]*$'
+    names+=("$name")
+    images+=("$image")
+    aliases+=(--network-alias "$name")
+    no_proxy="$no_proxy,$name"
+  done < <(jq -r '.services // {} | to_entries[] | "\(.key)\t\(.value.image)"' <<<"$jcfg")
+
+  # The services and the checks share one network namespace, as a GitHub job's steps reach its
+  # services on localhost: a test that insists on a database on this machine (Foliot's devseed)
+  # finds one at 127.0.0.1. A holder container owns the namespace and carries each service's
+  # name as an alias, so `postgres:5432` reaches it too. Two services cannot share a port.
+  docker run -d --label "local-ci.run=$ns" --label "local-ci.job=$job" --name "$net--pod" \
+    --network "$net" ${aliases[@]+"${aliases[@]}"} --entrypoint tail local-ci-proxy -f /dev/null >/dev/null
+  for i in ${names[@]+"${!names[@]}"}; do
+    name="${names[$i]}"
     env_flags_from "$(jq -c --arg n "$name" '.services[$n].env' <<<"$jcfg")"
     docker run -d --label "local-ci.run=$ns" --label "local-ci.job=$job" --name "$net-$name" \
-      --network "$net" --network-alias "$name" ${env_flags[@]+"${env_flags[@]}"} "$image" >/dev/null
-    no_proxy="$no_proxy,$name"
+      --network "container:$net--pod" ${env_flags[@]+"${env_flags[@]}"} "${images[$i]}" >/dev/null
     # Runs in the service's own container, which has no credential and no route out.
     ready="$(jq -r --arg n "$name" '.services[$n].ready // ""' <<<"$jcfg")"
     if [ -n "$ready" ]; then
@@ -511,7 +525,7 @@ run_go_job() {
       done
       [ -n "$ok" ] || die "service $name of job $job did not become ready in 60s ($ready)"
     fi
-  done < <(jq -r '.services // {} | to_entries[] | "\(.key)\t\(.value.image)"' <<<"$jcfg")
+  done
 
   env_flags_from "$(jq -c '.env' <<<"$jcfg")"
 
@@ -520,7 +534,7 @@ run_go_job() {
   # In an `if`, so a failing check is a result here rather than an ERR.
   echo "::: job $job" >> "$out/checks.log"
   if tar -C "$work/checks-$job" -cf - . | docker run --rm -i --label "local-ci.run=$ns" \
-    --label "local-ci.job=$job" --network "$net" \
+    --label "local-ci.job=$job" --network "container:$net--pod" \
     -e SHA="$sha" -e HTTPS_PROXY=http://proxy:8888 -e HTTP_PROXY=http://proxy:8888 -e NO_PROXY="$no_proxy" \
     ${module_flags[@]+"${module_flags[@]}"} ${env_flags[@]+"${env_flags[@]}"} \
     "$checks_image" >> "$out/checks.log" 2>&1; then
