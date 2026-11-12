@@ -204,12 +204,27 @@ input() { jq -r --arg k "$1" '.[$k] | if . == null then "" else tostring end' <<
 plan="[]"
 skipped="{}"
 
+# A `${{ }}` in what ci.yml passes the workflow is GitHub's to evaluate, not this script's: it
+# stops the run, naming the input. Except in env_json, where .local-ci.yml `env` (which wins
+# over env_json in any case) can give the variable a value: an expression there stops the run
+# only when it has none, as `vars.VITE_API_URL` would otherwise reach a build as that literal.
+refuse_expressions() { # <ci.yml job> <its with, as JSON> <its .local-ci.yml settings, as JSON>
+  local job="$1" with="$2" jcfg="$3" bad env_json unset
+  bad="$(jq -c 'del(.env_json) | to_entries | map(select(.value | tostring | contains("${{"))) | from_entries' <<<"$with")"
+  [ "$bad" = "{}" ] || die "ci.yml job '$job' passes a \${{ }} expression, which this cannot evaluate: $bad"
+  env_json="$(jq -r '.env_json // "{}" | tostring' <<<"$with")"
+  # shellcheck disable=SC2016 # the literal text ${{, not an expansion
+  [[ "$env_json" == *'${{'* ]] || return 0
+  unset="$(jq -r --argjson set "$(jq -c '.env // {}' <<<"$jcfg")" \
+    'to_entries | map(select(. as $e | ($e.value | tostring | contains("${{")) and ($set | has($e.key) | not)) | .key) | join(", ")' \
+    <<<"$env_json" 2>/dev/null)" || die "ci.yml job '$job' passes env_json that is not JSON once its \${{ }} expressions are text"
+  [ -z "$unset" ] || die "ci.yml job '$job' sets $unset in env_json from a \${{ }} expression, which this cannot evaluate; give each a value under jobs.$job.env in .local-ci.yml"
+}
+
 plan_go_job() { # <ci.yml job> <its .local-ci.yml settings, as JSON>
   local job="$1" jcfg="$2" with after wd go_version
   with="$(jq -c --arg j "$job" '.jobs[$j].with // {}' <<<"$ci")"
-  if jq -e 'to_entries | any(.value | tostring | contains("${{"))' <<<"$with" >/dev/null; then
-    die "ci.yml job '$job' passes a \${{ }} expression to go-ci, which this cannot evaluate: $(jq -c 'to_entries | map(select(.value | tostring | contains("${{"))) | from_entries' <<<"$with")"
-  fi
+  refuse_expressions "$job" "$with" "$jcfg"
   after="$(jq -r '.after // ""' <<<"$jcfg")"
   [ -z "$after" ] || must_be_relative_path "after" "$after"
   inputs="$(jq -c -n --argjson d "$defaults" --argjson w "$with" --arg after "$after" '$d + $w + {after: $after}')"
@@ -241,9 +256,7 @@ plan_node_job() { # <ci.yml job> <its .local-ci.yml settings, as JSON>
   [ -f "$wf" ] || die "ci.yml job '$job' calls node-pnpm-ci.yml, which this scripts/local-ci.sh does not extract; copy the current consumer-local-ci.sh from tinbee/ci-workflows local-ci/"
   node_defaults="$(yq -o json '.on.workflow_call.inputs | map_values(.default)' "$wf")"
   with="$(jq -c --arg j "$job" '.jobs[$j].with // {}' <<<"$ci")"
-  if jq -e 'to_entries | any(.value | tostring | contains("${{"))' <<<"$with" >/dev/null; then
-    die "ci.yml job '$job' passes a \${{ }} expression to node-pnpm-ci, which this cannot evaluate: $(jq -c 'to_entries | map(select(.value | tostring | contains("${{"))) | from_entries' <<<"$with")"
-  fi
+  refuse_expressions "$job" "$with" "$jcfg"
   after="$(jq -r '.after // ""' <<<"$jcfg")"
   [ -z "$after" ] || must_be_relative_path "after" "$after"
   inputs="$(jq -c -n --argjson d "$node_defaults" --argjson w "$with" --arg after "$after" '$d + $w + {after: $after}')"

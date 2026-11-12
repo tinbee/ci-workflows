@@ -97,7 +97,8 @@ replaces the login of every interactive `claude`.
            image: postgres:17
            env: { POSTGRES_USER: app, POSTGRES_PASSWORD: app, POSTGRES_DB: app_test }
            ready: pg_isready -h 127.0.0.1 -U app -d app_test   # docker exec'd until it passes, 60s
-       env:                     # for the checks; wins over ci.yml's env_json
+       env:                     # for the checks; wins over ci.yml's env_json, and must set any
+                                # key whose env_json value is a ${{ }} expression (vars.X)
          APP_TEST_DATABASE_URL: postgres://app:app@postgres:5432/app_test?sslmode=disable
        after: scripts/integration-test.sh   # optional, from the repo root
      web: {}                    # a node-pnpm-ci.yml job; the same settings apply
