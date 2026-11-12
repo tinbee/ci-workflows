@@ -524,7 +524,9 @@ start_proxy() { # <network> <name> <allow file> [<job>]: the only way out of an 
 # emits NUL-separated pairs; they go through a file so a jq refusal stops the run rather
 # than ending a loop early. Every pair must still contain `=`.
 env_flags_from() { # <JSON object, or null>
-  local kv file="$work/env-pairs"
+  # A file of its own per call: jobs run side by side, and a shared one mixed their env.
+  local kv file
+  file="$(mktemp "$work/env.XXXXXX")"
   env_flags=()
   jq -j '. // {} | to_entries[]
     | if (.key | test("^[A-Za-z_][A-Za-z0-9_]*$"))
@@ -863,12 +865,29 @@ for i in $(seq 0 $((n_jobs - 1))); do
   fi
 done
 if [ "$parallel" = 1 ]; then
-  for _ in $(seq 1 "$n_jobs"); do
+  # Only the pids still running: `wait -n` given one that already finished returns it again at
+  # once, every time, so a job that ended early would be counted for the others.
+  running=("${pids[@]}")
+  while [ "${#running[@]}" -gt 0 ]; do
     done_pid=""
-    wait -n -p done_pid "${pids[@]}" || true
+    wait -n -p done_pid "${running[@]}" || true
+    if [ -z "$done_pid" ]; then
+      # Never seen, but no job may go unrecorded: a missing one would let the run pass. Wait
+      # for each left, one by one, and record them all.
+      for p in "${running[@]}"; do
+        wait "$p" || true
+        for i in "${!pids[@]}"; do
+          if [ "${pids[$i]}" = "$p" ]; then finish "$i"; fi
+        done
+      done
+      break
+    fi
     for i in "${!pids[@]}"; do
       if [ "${pids[$i]}" = "$done_pid" ]; then finish "$i"; fi
     done
+    left=()
+    for p in "${running[@]}"; do [ "$p" = "$done_pid" ] || left+=("$p"); done
+    running=(${left[@]+"${left[@]}"})
   done
 fi
 checks_s=$((SECONDS - t_checks))
