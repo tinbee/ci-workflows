@@ -8,7 +8,9 @@ name: Release
 # cannot move them, on purpose: a pull request's workflows run with that token too, and v1 is
 # what every consumer runs. This job pushes the tags over SSH with the release deploy key, the
 # ruleset's one bypass besides admins, which is a secret of the `release` environment; only
-# main may deploy to that environment, so no pull request's workflow can read the key.
+# main may deploy to that environment, so no pull request's workflow can read the key. The
+# environment also has a required reviewer: each release waits, after the merge, for one
+# approval in the run's page, so a merge is a proposed release and the approval is the release.
 on:
   push:
     branches: [main]
