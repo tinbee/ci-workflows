@@ -42,9 +42,12 @@ the inputs it passes over the workflow's own defaults at `v1`:
   (their version files or versions). Any other action, an `if:`, a `container:` or a matrix
   stops the run naming it, as do services ci.yml gives the job that `.local-ci.yml` does not.
 
-Then the job's `after` script, for what its `ci.yml` runs outside the workflow. One job at a
-time, in ci.yml's order, each in its own container with its own
-services and network, stopping at the first that fails. A job's services share its checks
+Then the job's `after` script, for what its `ci.yml` runs outside the workflow. The jobs are
+prepared one at a time (image, modules, packages), then run side by side, each in its own
+container with its own services and network, and the run waits for all of them, as CI does, so
+one job's failure does not hide another's. `LOCAL_CI_PARALLEL=0`, or a bash older than 5.1, runs
+them one at a time instead. A job whose services or container could not start is recorded as
+`{error: "could not run"}` and the run exits 3. A job's services share its checks
 container's network namespace, so they are on `127.0.0.1` as a GitHub job's are, and also
 reachable by their names. `result.json` has each job under
 `checks.jobs`, as `{exit, seconds}` or `{skipped: <reason>}`. Not run locally:
@@ -65,18 +68,18 @@ structured ending, the shared `review-rules/` and the caller's `project_context`
 | | checks | review |
 | --- | --- | --- |
 | code | the commit (a git bundle) | the commit and its diff |
-| network | `--internal`, one per job; a proxy allows `checks-allow.txt` (buf.build for remote buf plugins, vuln.go.dev for govulncheck, binaries.prisma.sh for Prisma's engines, fonts.googleapis.com and fonts.gstatic.com for `next/font/google`) | `--internal`; a proxy allows `api.anthropic.com` |
+| network | `--internal`, one per job; a proxy allows `checks-allow.txt` (vuln.go.dev for govulncheck, binaries.prisma.sh for Prisma's engines, fonts.googleapis.com and fonts.gstatic.com for `next/font/google`) | `--internal`; a proxy allows `api.anthropic.com` |
 | Go modules | pre-fetched **on the host** with its own credentials, mounted read-only as `GOPROXY=file://`, and nothing else: every module in the commit (each `go.mod`), and each `go run`/`go install <path>@<version>` in the job's go-ci commands and `after` script, which must name an exact version | none |
 | npm packages | a copy, made for this run, of the repository's package caches (the Docker volume `local-ci-pnpm-<repo>`: the pnpm store, and for an inline job an npm cache too); every install is offline | none |
 | credentials | none | the Claude token only |
 | tools | Go at go.mod's version (its `toolchain` line if it has one, else its `go` line), and buf, sqlc, golangci-lint, govulncheck as ci.yml asks | Read/Glob/Grep; none of the commit's own Claude config |
 
-`binaries.prisma.sh`, `fonts.googleapis.com`, `fonts.gstatic.com` and `vuln.go.dev` serve
-fixed files: code in the commit can read from them, but cannot pass data through them to
-anyone. `buf.build` is the exception on the list: it accepts a `buf push` from anyone with a
-token, the same kind of exit as the npm registry below, and is there because remote buf
-plugins run on it. A host that fetches on a caller's behalf or accepts uploads otherwise does
-not belong in that file.
+Every host in `checks-allow.txt` serves fixed files: code in the commit can read from them,
+but cannot pass data through them to anyone. A host that fetches on a caller's behalf or
+accepts uploads does not belong in that file. That ruled out `buf.build`, which takes a `buf
+push` from anyone with a token: buf's remote plugins run on it, so a repo using them needs
+local plugins instead, pinned as Go tools (`local: ["go", "tool", "protoc-gen-go"]`, with
+`go get -tool ...@vX`), which is also the only way their version is fixed at all.
 
 No public module proxy or package registry is reachable from the checks container:
 proxy.golang.org fetches any path it is asked for from wherever that path points, and its

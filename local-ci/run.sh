@@ -20,8 +20,8 @@
 #           them, one container per ci.yml job; that job's .local-ci.yml services, on its own
 #           --internal network; the Go modules (every module in the commit, and each
 #           `go run tool@version` in ci.yml), pre-fetched on the host into a read-only file
-#           proxy; and, through a proxy, only the hosts in checks-allow.txt (buf.build,
-#           vuln.go.dev). For a node-pnpm-ci job, a copy of the repository's pnpm store, which
+#           proxy; and, through a proxy, only the hosts in checks-allow.txt (read-only
+#           hosts: vuln.go.dev and the like). For a node-pnpm-ci job, a copy of the repository's pnpm store, which
 #           a fetch container filled from the lockfile alone (it alone reaches the npm
 #           registry, and runs nothing of the commit's). No credential.
 #   review  the commit, its diff, the shared rules and the Claude token; Read, Glob and Grep
@@ -524,7 +524,9 @@ start_proxy() { # <network> <name> <allow file> [<job>]: the only way out of an 
 # emits NUL-separated pairs; they go through a file so a jq refusal stops the run rather
 # than ending a loop early. Every pair must still contain `=`.
 env_flags_from() { # <JSON object, or null>
-  local kv file="$work/env-pairs"
+  # A file of its own per call: jobs run side by side, and a shared one mixed their env.
+  local kv file
+  file="$(mktemp "$work/env.XXXXXX")"
   env_flags=()
   jq -j '. // {} | to_entries[]
     | if (.key | test("^[A-Za-z_][A-Za-z0-9_]*$"))
@@ -710,19 +712,33 @@ prepare_inline_job() {
   job_flags+=(--entrypoint /opt/local-ci/inline-checks.sh)
 }
 
-# One job, from its plan entry ($job, $kind, $jcfg, $inputs and the kind's fields): its modules
-# and image, its services on a network of its own, then its checks. Sets job_exit.
-run_job() {
-  local net="$ns-job-$job" name image ready ok after checks_image no_proxy=localhost,127.0.0.1
-  local names=() images=() aliases=() job_flags=() i
-  after="$(input after)"
+# A job's image, modules and packages, from its plan entry ($job, $kind and the kind's fields),
+# saved for execute_job: the image's name and the flags its container runs with. One job at a
+# time: the jobs of one repository share its package store, which the fetch writes.
+prepare_job() {
+  local checks_image job_flags=()
   case "$kind" in
     go) prepare_go_job ;;
     node) prepare_node_job ;;
     inline) prepare_inline_job ;;
   esac
+  printf '%s' "$checks_image" > "$work/image-$job"
+  : > "$work/flags-$job"
+  [ ${#job_flags[@]} -eq 0 ] || printf '%s\0' "${job_flags[@]}" > "$work/flags-$job"
+}
 
-  state checks
+# A prepared job's services, on a network of its own, then its checks; its output goes to
+# $work/<job>.checks.log and .proxy.log, and its checks' exit to $work/exit-<job>, written only
+# when they ran: a job with no exit file is one that could not run. In a subshell of its own,
+# so jobs run side by side; a `die` here ends this job, not the run.
+execute_job() {
+  local net="$ns-job-$job" name image ready ok after checks_image no_proxy=localhost,127.0.0.1
+  local names=() images=() aliases=() job_flags=() i f job_exit
+  local log="$work/$job.checks.log" proxy_log="$work/$job.proxy.log"
+  after="$(input after)"
+  checks_image="$(cat "$work/image-$job")"
+  while IFS= read -r -d '' f; do job_flags+=("$f"); done < "$work/flags-$job"
+
   echo "local-ci: checks on ${sha:0:12}: ci.yml job '$job' ($kind), then ${after:-no after script} (log: $out/checks.log)" >&2
   mkdir -p "$work/checks-$job"
   cp -R "$work/tree" "$work/checks-$job/tree"
@@ -769,38 +785,46 @@ run_job() {
   # No build cache kept between runs: the commit's code can write to it, and Go trusts a cache
   # entry by its key, so one commit could plant a result a later commit's build would use.
   # In an `if`, so a failing check is a result here rather than an ERR.
-  echo "::: job $job" >> "$out/checks.log"
   if tar -C "$work/checks-$job" -cf - . | docker run --rm -i --label "local-ci.run=$ns" \
     --label "local-ci.job=$job" --network "container:$net--pod" \
     -e SHA="$sha" -e HTTPS_PROXY=http://proxy:8888 -e HTTP_PROXY=http://proxy:8888 -e NO_PROXY="$no_proxy" \
     ${job_flags[@]+"${job_flags[@]}"} ${env_flags[@]+"${env_flags[@]}"} \
-    "$checks_image" >> "$out/checks.log" 2>&1; then
+    "$checks_image" > "$log" 2>&1; then
     job_exit=0
   else
     job_exit=$?
   fi
-  echo "::: job $job" >> "$out/checks-proxy.log"
-  docker logs "$net-proxy" >> "$out/checks-proxy.log" 2>&1 || true
+  docker logs "$net-proxy" > "$proxy_log" 2>&1 || true
   docker ps -aq --filter "label=local-ci.run=$ns" --filter "label=local-ci.job=$job" \
     | xargs docker rm -f >/dev/null 2>&1 || true
   docker network rm "$net" >/dev/null 2>&1 || true
-  docker volume ls -q --filter "label=local-ci.run=$ns" | xargs docker volume rm >/dev/null 2>&1 || true
+  # This job's own copy of the package caches only: another job may still be using its own.
+  docker volume rm "$ns-pnpm-$job" >/dev/null 2>&1 || true
   rm -rf "$work/checks-$job"
+  echo "$job_exit" > "$work/exit-$job"
 }
 
 # --- checks -----------------------------------------------------------------------------------
-# One job at a time, in ci.yml's order, stopping at the first that fails.
+# Every job is prepared first, one at a time (image, modules, packages), then all of them run
+# side by side, each on its own network with its own services, as CI's jobs do; the run waits
+# for every one, as CI does, so a failure in one does not hide another's. A job's log goes into
+# checks.log, under `::: job <name>`, when it finishes. LOCAL_CI_PARALLEL=0, or a bash older
+# than 5.1 (no `wait -n -p`), runs them one at a time instead, through the same code.
 : > "$out/checks.log"
 : > "$out/checks-proxy.log"
 : > "$out/modules.log"
 if [ "$skipped" != "{}" ]; then
   echo "local-ci: CI-only, not run here: $(jq -r 'to_entries | map("\(.key) (\(.value))") | join(", ")' <<<"$skipped")" >&2
 fi
+parallel=1
+if [ "${LOCAL_CI_PARALLEL:-1}" = 0 ] || ((BASH_VERSINFO[0] < 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 1))); then
+  parallel=0
+fi
 t_checks=$SECONDS
-checks_exit=0
-# By index, not `while read`: anything in a job that read stdin would eat the remaining entries.
-for i in $(seq 0 $(($(jq length <<<"$plan") - 1))); do
-  entry="$(jq -c --argjson i "$i" '.[$i]' <<<"$plan")"
+n_jobs="$(jq length <<<"$plan")"
+load_entry() { # <index>: that plan entry's fields, as the job functions read them
+  local entry
+  entry="$(jq -c --argjson i "$1" '.[$i]' <<<"$plan")"
   job="$(jq -r .name <<<"$entry")"
   jcfg="$(jq -c .cfg <<<"$entry")"
   kind="$(jq -r .kind <<<"$entry")"
@@ -809,21 +833,76 @@ for i in $(seq 0 $(($(jq length <<<"$plan") - 1))); do
   go_version="$(jq -r '.go_version // ""' <<<"$entry")"
   node_version="$(jq -r '.node_version // ""' <<<"$entry")"
   pnpm_version="$(jq -r '.pnpm_version // ""' <<<"$entry")"
-  t0=$SECONDS
-  run_job
-  checks_jobs="$(jq -c --arg n "$job" --argjson e "$job_exit" --argjson s "$((SECONDS - t0))" \
-    '. + {($n): {exit: $e, seconds: $s}}' <<<"$checks_jobs")"
-  if [ "$job_exit" -ne 0 ]; then
-    checks_exit=$job_exit
-    break
+}
+# By index, not `while read`: anything in a job that read stdin would eat the remaining entries.
+for i in $(seq 0 $((n_jobs - 1))); do
+  load_entry "$i"
+  prepare_job
+done
+
+job="$(jq -r 'map(.name) | join(",")' <<<"$plan")"
+state checks
+pids=()
+names=()
+started=()
+finish() { # <index>: that job's logs and exit, into the run's
+  local j="${names[$1]}" e=""
+  { echo "::: job $j"; cat "$work/$j.checks.log" 2>/dev/null || true; } >> "$out/checks.log"
+  { echo "::: job $j"; cat "$work/$j.proxy.log" 2>/dev/null || true; } >> "$out/checks-proxy.log"
+  [ ! -f "$work/exit-$j" ] || e="$(cat "$work/exit-$j")"
+  checks_jobs="$(jq -c --arg n "$j" --arg e "$e" --argjson s "$((SECONDS - started[$1]))" \
+    '. + {($n): (if $e == "" then {error: "could not run", seconds: $s} else {exit: ($e | tonumber), seconds: $s} end)}' <<<"$checks_jobs")"
+}
+for i in $(seq 0 $((n_jobs - 1))); do
+  load_entry "$i"
+  started+=("$SECONDS")
+  names+=("$job")
+  (execute_job) &
+  pids+=("$!")
+  if [ "$parallel" = 0 ]; then
+    wait "$!" || true
+    finish "$i"
   fi
 done
+if [ "$parallel" = 1 ]; then
+  # Only the pids still running: `wait -n` given one that already finished returns it again at
+  # once, every time, so a job that ended early would be counted for the others.
+  running=("${pids[@]}")
+  while [ "${#running[@]}" -gt 0 ]; do
+    done_pid=""
+    wait -n -p done_pid "${running[@]}" || true
+    if [ -z "$done_pid" ]; then
+      # Never seen, but no job may go unrecorded: a missing one would let the run pass. Wait
+      # for each left, one by one, and record them all.
+      for p in "${running[@]}"; do
+        wait "$p" || true
+        for i in "${!pids[@]}"; do
+          if [ "${pids[$i]}" = "$p" ]; then finish "$i"; fi
+        done
+      done
+      break
+    fi
+    for i in "${!pids[@]}"; do
+      if [ "${pids[$i]}" = "$done_pid" ]; then finish "$i"; fi
+    done
+    left=()
+    for p in "${running[@]}"; do [ "$p" = "$done_pid" ] || left+=("$p"); done
+    running=(${left[@]+"${left[@]}"})
+  done
+fi
 checks_s=$((SECONDS - t_checks))
 
-if [ "$checks_exit" -ne 0 ]; then
+failed="$(jq -r 'to_entries | map(select(.value.exit != null and .value.exit != 0) | .key) | join(", ")' <<<"$checks_jobs")"
+broken="$(jq -r 'to_entries | map(select(.value.error != null) | .key) | join(", ")' <<<"$checks_jobs")"
+if [ -n "$broken" ]; then
+  tail -40 "$out/checks.log" >&2
+  die "job(s) $broken could not run (${checks_s}s; log: $out/checks.log)"
+fi
+if [ -n "$failed" ]; then
+  checks_exit="$(jq '[.[] | .exit // 0] | max' <<<"$checks_jobs")"
   write_result fail-checks "$checks_exit" null null
   tail -40 "$out/checks.log" >&2
-  echo "local-ci: checks FAILED in job '$job' (exit $checks_exit, ${checks_s}s); no review of code that fails CI" >&2
+  echo "local-ci: checks FAILED in $failed (${checks_s}s); no review of code that fails CI" >&2
   exit 1
 fi
 job=""
