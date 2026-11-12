@@ -116,6 +116,12 @@ on:
           because gofmt exits 0 whether or not files need formatting.
         type: boolean
         default: true
+      tidy_check:
+        description: >-
+          Fail when `go mod tidy` would change go.mod or go.sum (`go mod tidy -diff`).
+          Off by default: turn it on once the module is tidy, or the first run fails.
+        type: boolean
+        default: false
       timeout_minutes:
         type: number
         default: 20
@@ -436,6 +442,14 @@ jobs:
             printf '%s\n' "$unformatted"
             exit 1
           fi
+
+      # -diff changes nothing: it prints the diff tidy would make and exits 1 when there is
+      # one. Without a check, a dependency bump made with `go get` and no tidy leaves stale
+      # requires and go.sum lines that nothing notices.
+      - name: go.mod and go.sum are tidy
+        if: inputs.tidy_check
+        working-directory: ${{ inputs.working_directory }}
+        run: go mod tidy -diff
 
       - name: Build
         if: inputs.build_command != ''

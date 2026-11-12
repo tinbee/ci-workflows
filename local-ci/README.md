@@ -28,7 +28,7 @@ running command ends; removing the containers ends it). confleet's Local CI page
 the inputs it passes over the workflow's own defaults at `v1`:
 
 - `go-checks.sh`: go-ci's steps in go-ci's order (generate + drift check, lint, golangci-lint,
-  gofmt, build, test with `-count=1`, govulncheck, post).
+  gofmt, tidy, build, test with `-count=1`, govulncheck, post).
 - `node-checks.sh`: node-pnpm-ci's steps in its order (install, pre-check, format check, lint,
   typecheck, build, test), with Node at the commit's `node_version_file` (else `node_version`),
   pnpm at `package.json`'s `packageManager`, and `CI=true`. Not `coverage_command`, which CI
