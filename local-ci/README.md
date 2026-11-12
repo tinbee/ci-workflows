@@ -42,9 +42,12 @@ the inputs it passes over the workflow's own defaults at `v1`:
   (their version files or versions). Any other action, an `if:`, a `container:` or a matrix
   stops the run naming it, as do services ci.yml gives the job that `.local-ci.yml` does not.
 
-Then the job's `after` script, for what its `ci.yml` runs outside the workflow. One job at a
-time, in ci.yml's order, each in its own container with its own
-services and network, stopping at the first that fails. A job's services share its checks
+Then the job's `after` script, for what its `ci.yml` runs outside the workflow. The jobs are
+prepared one at a time (image, modules, packages), then run side by side, each in its own
+container with its own services and network, and the run waits for all of them, as CI does, so
+one job's failure does not hide another's. `LOCAL_CI_PARALLEL=0`, or a bash older than 5.1, runs
+them one at a time instead. A job whose services or container could not start is recorded as
+`{error: "could not run"}` and the run exits 3. A job's services share its checks
 container's network namespace, so they are on `127.0.0.1` as a GitHub job's are, and also
 reachable by their names. `result.json` has each job under
 `checks.jobs`, as `{exit, seconds}` or `{skipped: <reason>}`. Not run locally:
