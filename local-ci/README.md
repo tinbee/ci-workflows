@@ -53,7 +53,7 @@ structured ending, the shared `review-rules/` and the caller's `project_context`
 | network | `--internal`, one per job; a proxy allows `checks-allow.txt` (buf.build for remote buf plugins, vuln.go.dev for govulncheck) | `--internal`; a proxy allows `api.anthropic.com` |
 | modules | pre-fetched **on the host** with its own credentials, mounted read-only as `GOPROXY=file://`, and nothing else: every module in the commit (each `go.mod`), and each `go run`/`go install <path>@<version>` in the job's go-ci commands and `after` script, which must name an exact version | none |
 | credentials | none | the Claude token only |
-| tools | Go at go.mod's version, and buf, sqlc, golangci-lint, govulncheck as ci.yml asks | Read/Glob/Grep; none of the commit's own Claude config |
+| tools | Go at go.mod's version (its `toolchain` line if it has one, else its `go` line), and buf, sqlc, golangci-lint, govulncheck as ci.yml asks | Read/Glob/Grep; none of the commit's own Claude config |
 
 No public module proxy is reachable from the checks container: proxy.golang.org fetches any
 path it is asked for from wherever that path points, so code in the commit could send data

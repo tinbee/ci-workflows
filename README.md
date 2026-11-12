@@ -370,8 +370,9 @@ belongs in the caller — see instastack's `ci.yml`.
 
 #### When govulncheck fails on the Go version
 
-go-ci builds and scans with exactly the Go version `go.mod` names, because that is the
-version the release binary is built with. So when a Go patch release fixes a
+go-ci builds and scans with exactly the Go version `go.mod` names (its `toolchain` line
+if it has one, else its `go` line), because that is the version the release binary is
+built with. So when a Go patch release fixes a
 standard-library vulnerability, govulncheck fails in every Go repo at once, on pull
 requests that did not cause it. After a failed scan, the step **Is the fix a newer Go?**
 re-reads govulncheck's findings and says so in an error annotation:
