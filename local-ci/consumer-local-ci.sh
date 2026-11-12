@@ -4,7 +4,7 @@
 # read from a local checkout of it; this file only fetches it. This repo's own part is
 # .local-ci.yml. Copied from tinbee/ci-workflows local-ci/consumer-local-ci.sh.
 #
-#   scripts/local-ci.sh [--base <ref>] [<commit>]   checks + review (make local-ci)
+#   scripts/local-ci.sh [--base <ref>] [<commit>]   checks + review (the repo's local-ci target)
 #   scripts/local-ci.sh accept <commit> <reason>    override a fail-review you judged wrong
 #   scripts/local-ci.sh install-hook                gate pushes on a passing result
 set -euo pipefail
