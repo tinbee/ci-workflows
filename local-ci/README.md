@@ -24,11 +24,18 @@ running command ends; removing the containers ends it). confleet's Local CI page
 
 ## What runs
 
-**Checks: each go-ci.yml job, as the commit's own ci.yml calls it.** `go-checks.sh` runs
-go-ci's steps in go-ci's order (generate + drift check, lint, golangci-lint, gofmt, build, test
-with `-count=1`, govulncheck, post), with the inputs the commit's `ci.yml` passes over
-go-ci.yml's own defaults at `v1`. Then the job's `after` script, for what its `ci.yml` runs
-outside go-ci. One job at a time, in ci.yml's order, each in its own container with its own
+**Checks: each go-ci.yml and node-pnpm-ci.yml job, as the commit's own ci.yml calls it,** with
+the inputs it passes over the workflow's own defaults at `v1`:
+
+- `go-checks.sh`: go-ci's steps in go-ci's order (generate + drift check, lint, golangci-lint,
+  gofmt, build, test with `-count=1`, govulncheck, post).
+- `node-checks.sh`: node-pnpm-ci's steps in its order (install, pre-check, format check, lint,
+  typecheck, build, test), with Node at the commit's `node_version_file` (else `node_version`),
+  pnpm at `package.json`'s `packageManager`, and `CI=true`. Not `coverage_command`, which CI
+  runs only on a push to the default branch, nor the turbo remote cache.
+
+Then the job's `after` script, for what its `ci.yml` runs outside the workflow. One job at a
+time, in ci.yml's order, each in its own container with its own
 services and network, stopping at the first that fails. A job's services share its checks
 container's network namespace, so they are on `127.0.0.1` as a GitHub job's are, and also
 reachable by their names. `result.json` has each job under
@@ -36,7 +43,7 @@ reachable by their names. `result.json` has each job under
 
 - **`pre_command`**: CI's machine setup (woahbar and Foliot start Postgres with it).
   `.local-ci.yml` `services` replace it.
-- **Jobs that call another workflow, or are written inline in ci.yml.** With `jobs:`, each is
+- **Jobs that call any other workflow, or are written inline in ci.yml.** With `jobs:`, each is
   listed as `skip: <reason>`, so the result says what a pass does not cover. Where an inline
   job can run in a go-ci job's container, put its commands in a script that CI and `after`
   both call, so the two cannot drift (instastack's `scripts/integration-test.sh`).
@@ -51,13 +58,25 @@ structured ending, the shared `review-rules/` and the caller's `project_context`
 | --- | --- | --- |
 | code | the commit (a git bundle) | the commit and its diff |
 | network | `--internal`, one per job; a proxy allows `checks-allow.txt` (buf.build for remote buf plugins, vuln.go.dev for govulncheck) | `--internal`; a proxy allows `api.anthropic.com` |
-| modules | pre-fetched **on the host** with its own credentials, mounted read-only as `GOPROXY=file://`, and nothing else: every module in the commit (each `go.mod`), and each `go run`/`go install <path>@<version>` in the job's go-ci commands and `after` script, which must name an exact version | none |
+| Go modules | pre-fetched **on the host** with its own credentials, mounted read-only as `GOPROXY=file://`, and nothing else: every module in the commit (each `go.mod`), and each `go run`/`go install <path>@<version>` in the job's go-ci commands and `after` script, which must name an exact version | none |
+| npm packages | a copy, made for this run, of the repository's pnpm store (the Docker volume `local-ci-pnpm-<repo>`); the install is offline | none |
 | credentials | none | the Claude token only |
 | tools | Go at go.mod's version (its `toolchain` line if it has one, else its `go` line), and buf, sqlc, golangci-lint, govulncheck as ci.yml asks | Read/Glob/Grep; none of the commit's own Claude config |
 
-No public module proxy is reachable from the checks container: proxy.golang.org fetches any
-path it is asked for from wherever that path points, so code in the commit could send data
-out through it, and its downloads redirect to storage.googleapis.com, which is any bucket.
+No public module proxy or package registry is reachable from the checks container:
+proxy.golang.org fetches any path it is asked for from wherever that path points, and its
+downloads redirect to storage.googleapis.com, which is any bucket; the npm registry accepts a
+publish from anyone with a token. Code in the commit could send data out through any of them.
+
+npm packages come from a **fetch container** instead, the only one that reaches
+`registry.npmjs.org` (`npm-allow.txt`, and nothing else). It is given the commit's
+`package.json` files, `pnpm-lock.yaml` and `pnpm-workspace.yaml`, none executable, no other
+file (not `.npmrc`, which can name programs for pnpm to run), and runs `pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile` into the store
+volume, so none of the commit's code or its dependencies' install scripts runs there. The
+checks get a copy because pnpm opens its store's index for writing: a read-only mount does not
+install, and a shared writable store would let one commit change the packages a later run
+installs. The store volume grows with every lockfile it has seen; `docker volume rm
+local-ci-pnpm-<repo>` starts it again (the next run fetches everything).
 
 The token (`LOCAL_CI_CLAUDE_TOKEN`, a `claude setup-token` token) reaches only the review
 container, as `CLAUDE_CODE_OAUTH_TOKEN`. Never export it under that name on the host: it
@@ -81,8 +100,9 @@ replaces the login of every interactive `claude`.
        env:                     # for the checks; wins over ci.yml's env_json
          APP_TEST_DATABASE_URL: postgres://app:app@postgres:5432/app_test?sslmode=disable
        after: scripts/integration-test.sh   # optional, from the repo root
-     web:
-       skip: no node-pnpm-ci.yml mirror yet   # stays CI-only; the reason goes in the result
+     web: {}                    # a node-pnpm-ci.yml job; the same settings apply
+     e2e:
+       skip: needs a browser    # stays CI-only; the reason goes in the result
    ```
 
    A ci.yml job missing from `jobs:`, or a `jobs:` entry ci.yml does not have, stops the run,
@@ -94,5 +114,5 @@ replaces the login of every interactive `claude`.
    or, in a repo that versions its hooks with `core.hooksPath` (instastack's `.githooks`),
    a committed `pre-push` that runs `scripts/local-ci.sh pre-push "$@"`.
 
-Only go-ci.yml callers for now; node-pnpm-ci.yml is the next shape to mirror when a pnpm repo
-adopts this.
+A node-pnpm-ci.yml job needs the consumer script from v1.27.0 on, which extracts that workflow
+too; an older copy stops with a message saying to update it.

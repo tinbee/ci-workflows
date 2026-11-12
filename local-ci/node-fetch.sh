@@ -6,11 +6,17 @@
 # the registry is reachable: npm accepts a publish from anyone with a token, so code here could
 # otherwise send the repository out.
 #
-# stdin: a tar of the manifests (every package.json, pnpm-lock.yaml, pnpm-workspace.yaml, .npmrc).
+# Not .npmrc, which can name programs for pnpm to run (`git=`), and no file of this stays
+# executable: a manifest could otherwise be both the program and the thing it reads. What
+# pnpm-workspace.yaml configures is needed (packages, catalogs, overrides); it has no setting
+# that runs code with scripts and the pnpmfile off.
+#
+# stdin: a tar of the manifests (every package.json, pnpm-lock.yaml, pnpm-workspace.yaml).
 set -euo pipefail
 
 mkdir -p ~/fetch
 # macOS tar adds xattr headers (com.apple.provenance) that GNU tar warns about, once per file.
 tar --warning=no-unknown-keyword -xf - -C ~/fetch
+chmod -R a-x,a+X ~/fetch
 cd ~/fetch
 pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile --store-dir /pnpm/store --cache-dir /pnpm/cache

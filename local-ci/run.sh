@@ -552,7 +552,7 @@ prepare_node_job() {
   manifests="$work/manifests-$job"
   # One path a line, unquoted: tar -T reads lines, and quotePath would escape non-ASCII names.
   git -c core.quotePath=false ls-tree -r --name-only "$sha" \
-    | grep -E '(^|/)package\.json$|^pnpm-lock\.yaml$|^pnpm-workspace\.yaml$|^\.npmrc$' \
+    | grep -E '(^|/)package\.json$|^pnpm-lock\.yaml$|^pnpm-workspace\.yaml$' \
     | grep -Ev '(^|/)node_modules/' > "$manifests" || true
   grep -qx 'pnpm-lock.yaml' "$manifests" || die "${sha:0:12} has no pnpm-lock.yaml, which a frozen install needs"
   docker network create --internal --label "local-ci.run=$ns" "$fnet" >/dev/null
@@ -590,7 +590,10 @@ run_job() {
   mkdir -p "$work/checks-$job"
   cp -R "$work/tree" "$work/checks-$job/tree"
   printf '%s\n' "$inputs" > "$work/checks-$job/inputs.json"
-  docker network create --internal --label "local-ci.run=$ns" "$net" >/dev/null
+  # --ipv6: without an IPv6 interface, getaddrinfo leaves ::1 out of `localhost`, while Node
+  # still listens on ::1 for it, so a test that serves on localhost and fetches from it is
+  # refused (Foliot's packages/ui). GitHub's runners have IPv6, and pass it.
+  docker network create --internal --ipv6 --label "local-ci.run=$ns" "$net" >/dev/null
   start_proxy "$net" "$net-proxy" "$shared/local-ci/checks-allow.txt" "$job"
 
   while IFS=$'\t' read -r name image; do
