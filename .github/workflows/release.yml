@@ -1,0 +1,85 @@
+name: Release
+
+# Every push to main is a release: the next v1.x.y (minor for a `feat` commit, patch for any
+# other) at that commit, and v1 moved onto it, so every repo calling these workflows @v1, and
+# every local-ci run, picks it up next time. Before this, each release was cut by hand.
+#
+# Tags matching v* are protected (the protect-release-tags ruleset), and this repo's own token
+# cannot move them, on purpose: a pull request's workflows run with that token too, and v1 is
+# what every consumer runs. This job pushes the tags over SSH with the release deploy key, the
+# ruleset's one bypass besides admins, which is a secret of the `release` environment; only
+# main may deploy to that environment, so no pull request's workflow can read the key.
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release
+  # Never cancel a release half-way: a version tag without v1 moved onto it is a release
+  # nobody gets.
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Tag the release and move v1
+        env:
+          RELEASE_DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$RELEASE_DEPLOY_KEY" ]; then
+            echo "::error::RELEASE_DEPLOY_KEY is not set in the release environment"
+            exit 1
+          fi
+
+          # A re-run of a job that already tagged this commit does nothing.
+          here="$(git tag --points-at HEAD)"
+          case "$here" in
+            *v1.*.*) echo "already released: $here"; exit 0 ;;
+          esac
+
+          mapfile -t released < <(git tag -l 'v1.*.*' --sort=-v:refname)
+          latest="${released[0]:-v1.0.0}"
+          if ! [[ "$latest" =~ ^v1\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::the newest v1 tag, $latest, is not v1.<minor>.<patch>"
+            exit 1
+          fi
+          minor="${BASH_REMATCH[1]}"
+          patch="${BASH_REMATCH[2]}"
+          # A Conventional Commits subject: feat (with or without a scope or !) is a minor.
+          subject="$(git log -1 --format=%s HEAD)"
+          if [[ "$subject" =~ ^feat(\(.*\))?!?: ]]; then
+            next="v1.$((minor + 1)).0"
+          else
+            next="v1.${minor}.$((patch + 1))"
+          fi
+          echo "releasing $next ($subject), after $latest"
+
+          key="$(mktemp)"
+          known="$(mktemp)"
+          trap 'rm -f "$key" "$known"' EXIT
+          printf '%s\n' "$RELEASE_DEPLOY_KEY" > "$key"
+          chmod 600 "$key"
+          # github.com's published ed25519 host key, not one learned on the way.
+          echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > "$known"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$known -o StrictHostKeyChecking=yes"
+          remote="git@github.com:${GITHUB_REPOSITORY}.git"
+
+          git tag "$next" HEAD
+          git push "$remote" "refs/tags/$next"
+          git tag -f v1 HEAD
+          git push --force "$remote" refs/tags/v1
+          echo "::notice::released $next; v1 is now $(git rev-parse --short HEAD)"
