@@ -570,8 +570,13 @@ prepare_node_job() {
   docker volume create --label "local-ci.run=$ns" "$copy" >/dev/null
   docker run --rm --label "local-ci.run=$ns" --user 0 -v "$store:/s:ro" -v "$copy:/r" --entrypoint sh "$checks_image" \
     -c 'cp -a /s/. /r/ && chown node:node /r' || die "could not copy the pnpm store for this run"
+  # ipv4first: with no IPv6 interface, as on these networks, getaddrinfo leaves ::1 out of
+  # `localhost`, while Node would still listen on ::1 for it, so a test that serves on
+  # localhost and fetches from it is refused (Foliot's packages/ui). GitHub's runners have
+  # IPv6, where both agree. Not IPv6 on the network instead: whether --internal holds for IPv6
+  # depends on the daemon's ip6tables setting. .local-ci.yml `env` can still set its own.
   job_flags=(-v "$copy:/pnpm" -e pnpm_config_store_dir=/pnpm/store -e pnpm_config_cache_dir=/pnpm/cache
-    -e pnpm_config_offline=true -e CI=true)
+    -e pnpm_config_offline=true -e CI=true -e NODE_OPTIONS=--dns-result-order=ipv4first)
 }
 
 # One job, from its plan entry ($job, $kind, $jcfg, $inputs and the kind's fields): its modules
@@ -590,10 +595,7 @@ run_job() {
   mkdir -p "$work/checks-$job"
   cp -R "$work/tree" "$work/checks-$job/tree"
   printf '%s\n' "$inputs" > "$work/checks-$job/inputs.json"
-  # --ipv6: without an IPv6 interface, getaddrinfo leaves ::1 out of `localhost`, while Node
-  # still listens on ::1 for it, so a test that serves on localhost and fetches from it is
-  # refused (Foliot's packages/ui). GitHub's runners have IPv6, and pass it.
-  docker network create --internal --ipv6 --label "local-ci.run=$ns" "$net" >/dev/null
+  docker network create --internal --label "local-ci.run=$ns" "$net" >/dev/null
   start_proxy "$net" "$net-proxy" "$shared/local-ci/checks-allow.txt" "$job"
 
   while IFS=$'\t' read -r name image; do
