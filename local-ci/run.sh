@@ -285,7 +285,9 @@ plan_node_job() { # <ci.yml job> <its .local-ci.yml settings, as JSON>
   local wf="$shared/.github/workflows/node-pnpm-ci.yml"
   [ -f "$wf" ] || die "ci.yml job '$job' calls node-pnpm-ci.yml, which this scripts/local-ci.sh does not extract; copy the current consumer-local-ci.sh from tinbee/ci-workflows local-ci/"
   node_defaults="$(yq -o json '.on.workflow_call.inputs | map_values(.default)' "$wf")"
-  with="$(jq -c --arg j "$job" '.jobs[$j].with // {}' <<<"$ci")"
+  # Not the turbo remote cache's inputs: local-ci runs turbo without it, so whatever expression
+  # ci.yml passes for them (`vars.TURBO_API`) has nothing here to stop.
+  with="$(jq -c --arg j "$job" '.jobs[$j].with // {} | del(.turbo_api, .turbo_team)' <<<"$ci")"
   refuse_expressions "$job" "$with" "$jcfg"
   after="$(jq -r '.after // ""' <<<"$jcfg")"
   [ -z "$after" ] || must_be_relative_path "after" "$after"
