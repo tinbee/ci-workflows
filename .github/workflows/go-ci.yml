@@ -112,8 +112,8 @@ on:
         default: true
       gofmt_check:
         description: >-
-          Fail when `gofmt -l` names any file. Checked as emptiness of its output,
-          because gofmt exits 0 whether or not files need formatting.
+          Fail when `gofmt -l` names any file outside vendor/. Checked as emptiness of
+          its output, because gofmt exits 0 whether or not files need formatting.
         type: boolean
         default: true
       tidy_check:
@@ -436,7 +436,10 @@ jobs:
         run: |
           # The EMPTINESS of the output is the signal: gofmt -l prints the files needing
           # formatting and exits 0 either way, so `gofmt -l .` on its own never fails.
-          unformatted=$(gofmt -l .)
+          # vendor/ is third-party code, and some of it is not gofmt-clean (aws
+          # smithy-go), so `gofmt -l .` failed every vendored module. -r: no Go files
+          # at all must not leave gofmt reading stdin.
+          unformatted=$(find . -path ./vendor -prune -o -name '*.go' -type f -print0 | xargs -0 -r gofmt -l)
           if [ -n "$unformatted" ]; then
             echo "::error::gofmt would change these files:"
             printf '%s\n' "$unformatted"

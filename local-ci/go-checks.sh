@@ -67,7 +67,7 @@ fi
 
 if [ "$(input gofmt_check)" = true ]; then
   # shellcheck disable=SC2016 # expanded by the step's own bash, not here
-  step "gofmt" 'unformatted=$(gofmt -l .)
+  step "gofmt" 'unformatted=$(find . -path ./vendor -prune -o -name "*.go" -type f -print0 | xargs -0 -r gofmt -l)
 if [ -n "$unformatted" ]; then
   echo "gofmt would change these files:"
   printf "%s\n" "$unformatted"
