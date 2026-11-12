@@ -798,6 +798,7 @@ test is what makes it loud.
 - Floating major tags: `@v1`, `@v2`, ... — consumers pin to these, pick up patch + minor changes automatically.
 - Full versions: `@v1.0.0`, `@v1.0.1`, ... — for pinning to an exact release.
 - Breaking changes always bump the floating major (`@v1` → `@v2`); consumers migrate on their own schedule.
+- **Releases are automatic.** `release.yml` runs on every push to `main`: it tags the next `v1.x.y` (minor for a `feat` commit, patch otherwise) and moves `v1` onto it. It pushes over SSH with the release deploy key, the `protect-release-tags` ruleset's one bypass besides admins, held as a secret of the `release` environment, which only `main` can deploy to: a pull request's workflows cannot read it, so no PR can move `v1`. The environment has a required reviewer, so each release waits for one approval on the run's page after the merge.
 
 ## Adding a new workflow
 
