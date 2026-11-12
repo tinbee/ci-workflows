@@ -1,2 +1,4 @@
 buf.build
 vuln.go.dev
+proxy.golang.org
+sum.golang.org
