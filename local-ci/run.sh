@@ -18,11 +18,10 @@
 # What each container can reach:
 #   checks  the commit; go-ci's steps as the commit's own ci.yml configures them, one
 #           container per ci.yml job; that job's .local-ci.yml services, on its own
-#           --internal network; the Go modules, pre-fetched on the host into a read-only file
-#           proxy checked against go.sum, then proxy.golang.org for public modules the host
-#           did not fetch (`go run tool@version`, a second module), checked against the
-#           checksum database; and, through a proxy, only the hosts in checks-allow.txt.
-#           No credential.
+#           --internal network; the Go modules (every module in the commit, and each
+#           `go run tool@version` in ci.yml), pre-fetched on the host into a read-only file
+#           proxy; and, through a proxy, only the hosts in checks-allow.txt (buf.build,
+#           vuln.go.dev). No credential.
 #   review  the commit, its diff, the shared rules and the Claude token; Read, Glob and Grep
 #           only; through a proxy, only api.anthropic.com. The token never enters the
 #           container that runs the commit's code.
@@ -395,37 +394,77 @@ env_flags_from() { # <JSON object, or null>
   done < "$file"
 }
 
-# Modules: a vendored repo needs none. Otherwise the HOST downloads them, with its own
-# credentials for private ones, into a cache the checks container sees as a read-only
-# GOPROXY=file:// tree, checked against the commit's go.sum. `go mod download` runs no module
-# code, and the commit decides none of how it fetches:
+# Modules: the HOST downloads them, with its own credentials for private ones, into a cache the
+# checks container sees only as a read-only GOPROXY=file:// tree. The container has no other
+# way to a module, so it can neither fetch anything else nor reach a credential, and a module
+# the host did not fetch fails the run. Downloading runs no module code, and the commit decides
+# none of how it happens:
 #   GOPRIVATE  the host's own, never ci.yml's goprivate: `*` there would send every fetch,
 #              vanity paths included, straight to VCS with the host's git credentials.
 #   GOVCS      private modules by git only, public ones only through the module proxy.
 #   GOTOOLCHAIN=local  go.mod's `toolchain` line cannot download and run another Go here.
-# What the host did not fetch, the container gets from proxy.golang.org, verified against
-# sum.golang.org: a `go run tool@version` in ci.yml, or a second module (Foliot's sdk/go). That
-# is public modules only: the container holds no credential, and GONOSUMDB (the host's
-# GOPRIVATE) keeps private paths away from the checksum database.
+#
+# What is fetched: every module in the commit (a go.mod outside testdata/, vendor/ and the
+# directories Go skips, `.x` and `_x`), unless vendored; and every `go run|install
+# <path>@<version>` in this job's go-ci commands and `after` script, resolved with `go get` in
+# a throwaway module, which downloads what the tool's build needs and runs none of it. Not a
+# public proxy from the container instead: proxy.golang.org fetches any path it is asked for,
+# from wherever that path points, so a commit's code could send data out through it.
+in_dir() { # <dir> <path>: <path> inside <dir>, without a leading ./ (which git reads as cwd)
+  if [ "$1" = . ]; then printf '%s' "$2"; else printf '%s/%s' "$1" "$2"; fi
+}
+host_go_env() { # <command...>: go on the host, fetching into the shared cache
+  GOMODCACHE="$GOMODCACHE_HOST" GOWORK=off GOFLAGS=-mod=mod GOPRIVATE="$host_goprivate" \
+    GONOPROXY='' GONOSUMDB='' GOINSECURE='' GOVCS='private:git,public:off' GOTOOLCHAIN=local "$@"
+}
 fetch_modules() { # for the job in $wd and $inputs; sets module_flags
-  local host_goprivate
+  local host_goprivate mods=() tools=() m k tool dir
   module_flags=()
-  if git cat-file -e "$sha:$wd/vendor/modules.txt" 2>/dev/null; then return 0; fi
-  command -v go >/dev/null || die "go is not installed on the host, and ${sha:0:12} is not vendored"
+  while IFS= read -r m; do
+    [ -n "$m" ] || continue
+    dir="$(dirname "$m")"
+    case "/$dir/" in */testdata/* | */vendor/* | */.[!/]*/* | */_*/*) continue ;; esac
+    if git cat-file -e "$sha:$(in_dir "$dir" vendor/modules.txt)" 2>/dev/null; then continue; fi
+    must_be_relative_path "module directory" "$dir"
+    mods+=("$dir")
+  done < <(git ls-tree -r --name-only "$sha" | grep -E '(^|/)go\.mod$' || true)
+  {
+    for k in generate_command lint_command build_command test_command post_command; do input "$k"; done
+    [ -z "$(input after)" ] || git show "$sha:$(input after)" 2>/dev/null || true
+  } > "$work/commands.txt"
+  while IFS= read -r tool; do
+    [ -n "$tool" ] || continue
+    # An exact version, so the container can resolve it from the cache with no listing.
+    must_match "go run/install target" "$tool" '^[A-Za-z0-9][A-Za-z0-9._~/-]*@v[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.+-]*)?$'
+    tools+=("$tool")
+  done < <(grep -oE 'go +(run|install) +[^[:space:]-][^[:space:]]*@[^[:space:]);&|"'"'"']+' "$work/commands.txt" \
+    | awk '{ print $NF }' | sort -u || true)
+  [ ${#mods[@]} -gt 0 ] || [ ${#tools[@]} -gt 0 ] || return 0
+
+  command -v go >/dev/null || die "go is not installed on the host, which fetches ${sha:0:12}'s modules"
   mkdir -p "$GOMODCACHE_HOST"
   host_goprivate="$(go env GOPRIVATE)"
   if [ -n "$(input goprivate)" ] && [ "$(input goprivate)" != "$host_goprivate" ]; then
     echo "local-ci: ci.yml's goprivate is '$(input goprivate)'; fetching with this machine's GOPRIVATE '$host_goprivate'" >&2
   fi
-  echo "local-ci: fetching $wd's modules on the host into $GOMODCACHE_HOST" >&2
-  echo "::: job $job ($wd)" >> "$out/modules.log"
-  (cd "$work/tree/$wd" && GOMODCACHE="$GOMODCACHE_HOST" GOWORK=off GOFLAGS=-mod=mod \
-    GOPRIVATE="$host_goprivate" GONOPROXY='' GONOSUMDB='' GOINSECURE='' GOVCS='private:git,public:off' \
-    GOTOOLCHAIN=local go mod download) >> "$out/modules.log" 2>&1 \
-    || { tail -20 "$out/modules.log" >&2; die "could not download ${sha:0:12}'s modules on the host (log: $out/modules.log)"; }
+  echo "local-ci: fetching on the host into $GOMODCACHE_HOST: modules of ${mods[*]:-nothing}${tools[*]:+; tools ${tools[*]}}" >&2
+  for dir in ${mods[@]+"${mods[@]}"}; do
+    echo "::: job $job: $dir" >> "$out/modules.log"
+    (cd "$work/tree/$dir" && host_go_env go mod download) >> "$out/modules.log" 2>&1 \
+      || { tail -20 "$out/modules.log" >&2; die "could not download the modules of $dir on the host (log: $out/modules.log)"; }
+  done
+  for tool in ${tools[@]+"${tools[@]}"}; do
+    echo "::: job $job: $tool" >> "$out/modules.log"
+    rm -rf "$work/tool" && mkdir -p "$work/tool"
+    (cd "$work/tool" && host_go_env go mod init local-ci-tool && host_go_env go get "$tool") >> "$out/modules.log" 2>&1 \
+      || { tail -20 "$out/modules.log" >&2; die "could not download $tool on the host (log: $out/modules.log)"; }
+  done
   module_flags=(-v "$GOMODCACHE_HOST/cache/download:/goproxy:ro"
-    -e "GOPROXY=file:///goproxy,https://proxy.golang.org" -e GOFLAGS=-mod=mod
-    -e GOPRIVATE= -e GONOPROXY= -e GONOSUMDB="$host_goprivate")
+    -e GOPROXY=file:///goproxy -e GOSUMDB=off -e GOPRIVATE= -e GONOSUMDB=)
+  # -mod=mod for an unvendored job only: in a vendored one it would bypass vendor/.
+  if ! git cat-file -e "$sha:$(in_dir "$wd" vendor/modules.txt)" 2>/dev/null; then
+    module_flags+=(-e GOFLAGS=-mod=mod)
+  fi
 }
 
 # One go-ci job, from its plan entry ($job, $jcfg, $inputs, $wd, $go_version): its modules, its
