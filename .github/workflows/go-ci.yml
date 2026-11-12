@@ -372,7 +372,12 @@ jobs:
       # the private repo. Three steps cache, and all three are switched off together:
       # this one, the setup-go inside govulncheck-action, and golangci-lint's own cache.
       # The cost is a cold module download on each run, for repos with private modules.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      #
+      # This step resolves the Go version once: go.mod's toolchain line if it has one,
+      # else its go line. Later steps take its go-version output rather than reading
+      # go.mod again, because not every setup-go reads the toolchain line.
+      - id: go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: ${{ inputs.working_directory }}/${{ inputs.go_version_file }}
           cache: ${{ inputs.goprivate == '' }}
@@ -456,13 +461,14 @@ jobs:
         if: inputs.govulncheck
         uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1
         with:
-          # The action's go-version-input defaults to `stable` and wins over
-          # go-version-file, so the scan would run the newest Go in setup-go's
-          # manifest, which lags a release: go.mod at go1.27.2 against
-          # manifest-stable go1.27.1 stops with "go.mod requires go >= 1.27.2".
-          # Empty lets go-version-file decide, as every other step here does.
-          go-version-input: ""
-          go-version-file: ${{ inputs.working_directory }}/${{ inputs.go_version_file }}
+          # The exact version the setup-go step above installed. Not go-version-file:
+          # the setup-go inside this action (v6.2.0) reads only the go line, so a
+          # library declaring `go 1.27.0` + `toolchain go1.27.4` was scanned on
+          # 1.27.0 and failed on standard-library bugs 1.27.4 fixes. Not the
+          # default either: `stable` is the newest Go in setup-go's manifest, which
+          # lags a release, so go.mod at go1.27.2 against manifest-stable go1.27.1
+          # stops with "go.mod requires go >= 1.27.2".
+          go-version-input: ${{ steps.go.outputs.go-version }}
           go-package: ./...
           work-dir: ${{ inputs.working_directory }}
           # See setup-go: no Actions cache with private modules.

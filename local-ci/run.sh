@@ -221,8 +221,12 @@ wd="$(input working_directory)"
 wd="${wd:-.}"
 must_be_relative_path "working_directory" "$wd"
 must_be_relative_path "go_version_file" "$(input go_version_file)"
-go_version="$(git show "$sha:$wd/$(input go_version_file)" | awk '$1 == "go" { print $2; exit }')"
-[ -n "$go_version" ] || die "no go line in $wd/$(input go_version_file) at ${sha:0:12}"
+# The toolchain line if there is one, else the go line: what go-ci's setup-go installs.
+go_version="$(git show "$sha:$wd/$(input go_version_file)" | awk '
+  $1 == "go" && go == "" { go = $2 }
+  $1 == "toolchain" && $2 ~ /^go[0-9]/ { tc = substr($2, 3) }
+  END { print (tc != "" ? tc : go) }')"
+[ -n "$go_version" ] || die "no go or toolchain line in $wd/$(input go_version_file) at ${sha:0:12}"
 must_match "go version" "$go_version" '^[0-9]+\.[0-9]+(\.[0-9]+)?((rc|beta)[0-9]+)?$'
 
 out="$results/$sha"
