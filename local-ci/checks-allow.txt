@@ -1,4 +1,3 @@
-buf.build
 vuln.go.dev
 binaries.prisma.sh
 fonts.googleapis.com

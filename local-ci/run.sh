@@ -20,8 +20,8 @@
 #           them, one container per ci.yml job; that job's .local-ci.yml services, on its own
 #           --internal network; the Go modules (every module in the commit, and each
 #           `go run tool@version` in ci.yml), pre-fetched on the host into a read-only file
-#           proxy; and, through a proxy, only the hosts in checks-allow.txt (buf.build,
-#           vuln.go.dev). For a node-pnpm-ci job, a copy of the repository's pnpm store, which
+#           proxy; and, through a proxy, only the hosts in checks-allow.txt (read-only
+#           hosts: vuln.go.dev and the like). For a node-pnpm-ci job, a copy of the repository's pnpm store, which
 #           a fetch container filled from the lockfile alone (it alone reaches the npm
 #           registry, and runs nothing of the commit's). No credential.
 #   review  the commit, its diff, the shared rules and the Claude token; Read, Glob and Grep
