@@ -13,7 +13,11 @@ FROM node:${NODE_VERSION}-bookworm
 
 ARG PNPM_VERSION=
 ARG GO_VERSION=
+# yq is mikefarah's, as GitHub's runners have it (ruleset drift guards call it); Debian's `yq`
+# package is a different program with a different syntax.
 RUN apt-get update && apt-get install -y --no-install-recommends jq && rm -rf /var/lib/apt/lists/* \
+  && curl -fsSL "https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_$(dpkg --print-architecture)" -o /usr/local/bin/yq \
+  && chmod +x /usr/local/bin/yq \
   && if [ -n "$PNPM_VERSION" ]; then npm install -g "pnpm@${PNPM_VERSION}"; fi \
   && if [ -n "$GO_VERSION" ]; then \
        curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-$(dpkg --print-architecture).tar.gz" | tar -xz -C /usr/local; \
