@@ -57,11 +57,18 @@ structured ending, the shared `review-rules/` and the caller's `project_context`
 | | checks | review |
 | --- | --- | --- |
 | code | the commit (a git bundle) | the commit and its diff |
-| network | `--internal`, one per job; a proxy allows `checks-allow.txt` (buf.build for remote buf plugins, vuln.go.dev for govulncheck) | `--internal`; a proxy allows `api.anthropic.com` |
+| network | `--internal`, one per job; a proxy allows `checks-allow.txt` (buf.build for remote buf plugins, vuln.go.dev for govulncheck, binaries.prisma.sh for Prisma's engines, fonts.googleapis.com and fonts.gstatic.com for `next/font/google`) | `--internal`; a proxy allows `api.anthropic.com` |
 | Go modules | pre-fetched **on the host** with its own credentials, mounted read-only as `GOPROXY=file://`, and nothing else: every module in the commit (each `go.mod`), and each `go run`/`go install <path>@<version>` in the job's go-ci commands and `after` script, which must name an exact version | none |
 | npm packages | a copy, made for this run, of the repository's pnpm store (the Docker volume `local-ci-pnpm-<repo>`); the install is offline | none |
 | credentials | none | the Claude token only |
 | tools | Go at go.mod's version (its `toolchain` line if it has one, else its `go` line), and buf, sqlc, golangci-lint, govulncheck as ci.yml asks | Read/Glob/Grep; none of the commit's own Claude config |
+
+`binaries.prisma.sh`, `fonts.googleapis.com`, `fonts.gstatic.com` and `vuln.go.dev` serve
+fixed files: code in the commit can read from them, but cannot pass data through them to
+anyone. `buf.build` is the exception on the list: it accepts a `buf push` from anyone with a
+token, the same kind of exit as the npm registry below, and is there because remote buf
+plugins run on it. A host that fetches on a caller's behalf or accepts uploads otherwise does
+not belong in that file.
 
 No public module proxy or package registry is reachable from the checks container:
 proxy.golang.org fetches any path it is asked for from wherever that path points, and its
@@ -115,5 +122,5 @@ replaces the login of every interactive `claude`.
    or, in a repo that versions its hooks with `core.hooksPath` (instastack's `.githooks`),
    a committed `pre-push` that runs `scripts/local-ci.sh pre-push "$@"`.
 
-A node-pnpm-ci.yml job needs the consumer script from v1.27.0 on, which extracts that workflow
+A node-pnpm-ci.yml job needs the consumer script from v1.28.0 on, which extracts that workflow
 too; an older copy stops with a message saying to update it.
