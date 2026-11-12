@@ -75,6 +75,9 @@ if [ -n "$unformatted" ]; then
 fi'
 fi
 
+# Its modules, tests of dependencies included, were fetched on the host (run.sh).
+[ "$(input tidy_check)" != true ] || step "go.mod and go.sum are tidy" "go mod tidy -diff"
+
 [ -z "$(input build_command)" ] || step "Build" "$(input build_command)"
 
 [ -z "$(input test_command)" ] || step "Test" "export GOFLAGS=\"\${GOFLAGS:+\$GOFLAGS }-count=1\"
