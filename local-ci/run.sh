@@ -13,7 +13,8 @@
 #   run.sh install-hook                install that hook in this repository
 #
 # Exit: 0 pass, 1 checks failed, 2 blocking findings, 3 could not run.
-# Result: <git common dir>/local-ci/<sha>/result.json.
+# Result: <git common dir>/local-ci/<sha>/result.json; each review's cost, also in
+# <git common dir>/local-ci/costs.jsonl.
 #
 # What each container can reach:
 #   checks  the commit; go-ci's or node-pnpm-ci's steps as the commit's own ci.yml configures
@@ -469,10 +470,16 @@ state preparing
 # checks.exit and seconds.checks are the whole of the checks; checks.jobs has each ci.yml job
 # as {exit, seconds}, or {skipped: reason}. A job after a failed one is absent: it did not run.
 checks_jobs="$(jq -c 'map_values({skipped: .})' <<<"$skipped")"
+#
+# A review the model answered also appends one line to <git common dir>/local-ci/costs.jsonl:
+# its cost under the same `created`, kept when a re-run of the commit replaces result.json or
+# Clean up deletes it, and written for an `error` too, whose result has no review to carry it.
 write_result() { # <status> <checks exit> <review json or null> <envelope json or null>
+  local at
+  at="$(date -u +%FT%TZ)"
   jq -n --arg sha "$sha" --arg base "$base" --arg status "$1" --argjson checks_exit "$2" \
     --argjson review "$3" --argjson envelope "$4" --arg model "$MODEL" --arg effort "$EFFORT" \
-    --arg at "$(date -u +%FT%TZ)" --argjson checks_s "${checks_s:-0}" --argjson review_s "${review_s:-0}" \
+    --arg at "$at" --argjson checks_s "${checks_s:-0}" --argjson review_s "${review_s:-0}" \
     --argjson jobs "$checks_jobs" \
     '{sha: $sha, base: $base, status: $status, created: $at,
       seconds: {checks: $checks_s, review: $review_s},
@@ -481,6 +488,12 @@ write_result() { # <status> <checks exit> <review json or null> <envelope json o
         model: $model, effort: $effort,
         turns: $envelope.num_turns, cost_usd: $envelope.total_cost_usd} end)}' \
     > "$out/result.json"
+  jq -nc --arg sha "$sha" --arg status "$1" --argjson envelope "$4" --arg model "$MODEL" \
+    --arg effort "$EFFORT" --arg at "$at" --argjson review_s "${review_s:-0}" \
+    'if ($envelope | type) == "object" and ($envelope.total_cost_usd | type) == "number" then
+       {created: $at, sha: $sha, status: $status, model: $model, effort: $effort,
+        seconds: $review_s, cost_usd: $envelope.total_cost_usd}
+     else empty end' >> "$results/costs.jsonl"
 }
 
 # --- inputs: the commit's files and diff, plus what each container needs beside them ----------

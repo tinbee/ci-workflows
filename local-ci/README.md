@@ -12,6 +12,10 @@ scripts/local-ci.sh accept <sha> "<why it is wrong>"  # override a fail-review
 
 Exit `0` pass, `1` checks failed, `2` blocking findings, `3` could not run. The result, with
 findings, timings and the review's cost, is in `$(git rev-parse --git-common-dir)/local-ci/<sha>/result.json`.
+Each review the model answered also appends one line to `local-ci/costs.jsonl` beside the
+results (`created`, `sha`, `status`, `model`, `effort`, `seconds`, `cost_usd`, the API price
+the Claude CLI reports): the cost history, which a re-run replacing `result.json` or a
+deleted result does not lose.
 A pre-push hook refuses a branch whose tip has not passed or been accepted
 (`git push --no-verify` skips it).
 
