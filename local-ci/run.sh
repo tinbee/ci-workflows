@@ -191,6 +191,9 @@ must_be_relative_path() { # <what> <value>: inside the tree, no `..`
   case "/$2/" in */../*) die "$1 '$2' leaves the repository" ;; esac
 }
 name_re='^[A-Za-z0-9][A-Za-z0-9_.-]*$'
+in_dir() { # <dir> <path>: <path> inside <dir>, without a leading ./ (which git reads as cwd)
+  if [ "$1" = . ]; then printf '%s' "$2"; else printf '%s/%s' "$1" "$2"; fi
+}
 
 # The caller's `with` over go-ci.yml's own defaults, so a default changed at v1 is the
 # default here too.
@@ -551,9 +554,6 @@ env_flags_from() { # <JSON object, or null>
 # a throwaway module, which downloads what the tool's build needs and runs none of it. Not a
 # public proxy from the container instead: proxy.golang.org fetches any path it is asked for,
 # from wherever that path points, so a commit's code could send data out through it.
-in_dir() { # <dir> <path>: <path> inside <dir>, without a leading ./ (which git reads as cwd)
-  if [ "$1" = . ]; then printf '%s' "$2"; else printf '%s/%s' "$1" "$2"; fi
-}
 host_go_env() { # <command...>: go on the host, fetching into the shared cache
   GOMODCACHE="$GOMODCACHE_HOST" GOWORK=off GOFLAGS=-mod=mod GOPRIVATE="$host_goprivate" \
     GONOPROXY='' GONOSUMDB='' GOINSECURE='' GOVCS='private:git,public:off' GOTOOLCHAIN=local "$@"
