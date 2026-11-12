@@ -51,6 +51,7 @@ fi
 shared="$(mktemp -d)"
 trap 'rm -rf "$shared"' EXIT
 if ! ciw_git archive "$ref" local-ci review review-rules .github/workflows/go-ci.yml \
+  .github/workflows/node-pnpm-ci.yml \
   | tar -x -C "$shared"; then
   echo "local-ci: $ref of $ciw has no local-ci/ (it is v1.23.0+)" >&2
   exit 3

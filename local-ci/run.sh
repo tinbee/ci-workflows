@@ -16,12 +16,14 @@
 # Result: <git common dir>/local-ci/<sha>/result.json.
 #
 # What each container can reach:
-#   checks  the commit; go-ci's steps as the commit's own ci.yml configures them, one
-#           container per ci.yml job; that job's .local-ci.yml services, on its own
+#   checks  the commit; go-ci's or node-pnpm-ci's steps as the commit's own ci.yml configures
+#           them, one container per ci.yml job; that job's .local-ci.yml services, on its own
 #           --internal network; the Go modules (every module in the commit, and each
 #           `go run tool@version` in ci.yml), pre-fetched on the host into a read-only file
 #           proxy; and, through a proxy, only the hosts in checks-allow.txt (buf.build,
-#           vuln.go.dev). No credential.
+#           vuln.go.dev). For a node-pnpm-ci job, a copy of the repository's pnpm store, which
+#           a fetch container filled from the lockfile alone (it alone reaches the npm
+#           registry, and runs nothing of the commit's). No credential.
 #   review  the commit, its diff, the shared rules and the Claude token; Read, Glob and Grep
 #           only; through a proxy, only api.anthropic.com. The token never enters the
 #           container that runs the commit's code.
@@ -202,12 +204,27 @@ input() { jq -r --arg k "$1" '.[$k] | if . == null then "" else tostring end' <<
 plan="[]"
 skipped="{}"
 
+# A `${{ }}` in what ci.yml passes the workflow is GitHub's to evaluate, not this script's: it
+# stops the run, naming the input. Except in env_json, where .local-ci.yml `env` (which wins
+# over env_json in any case) can give the variable a value: an expression there stops the run
+# only when it has none, as `vars.VITE_API_URL` would otherwise reach a build as that literal.
+refuse_expressions() { # <ci.yml job> <its with, as JSON> <its .local-ci.yml settings, as JSON>
+  local job="$1" with="$2" jcfg="$3" bad env_json unset
+  bad="$(jq -c 'del(.env_json) | to_entries | map(select(.value | tostring | contains("${{"))) | from_entries' <<<"$with")"
+  [ "$bad" = "{}" ] || die "ci.yml job '$job' passes a \${{ }} expression, which this cannot evaluate: $bad"
+  env_json="$(jq -r '.env_json // "{}" | tostring' <<<"$with")"
+  # shellcheck disable=SC2016 # the literal text ${{, not an expansion
+  [[ "$env_json" == *'${{'* ]] || return 0
+  unset="$(jq -r --argjson set "$(jq -c '.env // {}' <<<"$jcfg")" \
+    'to_entries | map(select(. as $e | ($e.value | tostring | contains("${{")) and ($set | has($e.key) | not)) | .key) | join(", ")' \
+    <<<"$env_json" 2>/dev/null)" || die "ci.yml job '$job' passes env_json that is not JSON once its \${{ }} expressions are text"
+  [ -z "$unset" ] || die "ci.yml job '$job' sets $unset in env_json from a \${{ }} expression, which this cannot evaluate; give each a value under jobs.$job.env in .local-ci.yml"
+}
+
 plan_go_job() { # <ci.yml job> <its .local-ci.yml settings, as JSON>
   local job="$1" jcfg="$2" with after wd go_version
   with="$(jq -c --arg j "$job" '.jobs[$j].with // {}' <<<"$ci")"
-  if jq -e 'to_entries | any(.value | tostring | contains("${{"))' <<<"$with" >/dev/null; then
-    die "ci.yml job '$job' passes a \${{ }} expression to go-ci, which this cannot evaluate: $(jq -c 'to_entries | map(select(.value | tostring | contains("${{"))) | from_entries' <<<"$with")"
-  fi
+  refuse_expressions "$job" "$with" "$jcfg"
   after="$(jq -r '.after // ""' <<<"$jcfg")"
   [ -z "$after" ] || must_be_relative_path "after" "$after"
   inputs="$(jq -c -n --argjson d "$defaults" --argjson w "$with" --arg after "$after" '$d + $w + {after: $after}')"
@@ -231,7 +248,39 @@ plan_go_job() { # <ci.yml job> <its .local-ci.yml settings, as JSON>
   must_match "go version" "$go_version" '^[0-9]+\.[0-9]+(\.[0-9]+)?((rc|beta)[0-9]+)?$'
 
   plan="$(jq -c --arg n "$job" --argjson c "$jcfg" --argjson i "$inputs" --arg wd "$wd" --arg g "$go_version" \
-    '. + [{name: $n, cfg: $c, inputs: $i, wd: $wd, go_version: $g}]' <<<"$plan")"
+    '. + [{name: $n, kind: "go", cfg: $c, inputs: $i, wd: $wd, go_version: $g}]' <<<"$plan")"
+}
+
+plan_node_job() { # <ci.yml job> <its .local-ci.yml settings, as JSON>
+  local job="$1" jcfg="$2" with after node_defaults node_version pnpm_version pm
+  local wf="$shared/.github/workflows/node-pnpm-ci.yml"
+  [ -f "$wf" ] || die "ci.yml job '$job' calls node-pnpm-ci.yml, which this scripts/local-ci.sh does not extract; copy the current consumer-local-ci.sh from tinbee/ci-workflows local-ci/"
+  node_defaults="$(yq -o json '.on.workflow_call.inputs | map_values(.default)' "$wf")"
+  with="$(jq -c --arg j "$job" '.jobs[$j].with // {}' <<<"$ci")"
+  refuse_expressions "$job" "$with" "$jcfg"
+  after="$(jq -r '.after // ""' <<<"$jcfg")"
+  [ -z "$after" ] || must_be_relative_path "after" "$after"
+  inputs="$(jq -c -n --argjson d "$node_defaults" --argjson w "$with" --arg after "$after" '$d + $w + {after: $after}')"
+
+  # setup-node reads node_version_file when it is set, else node_version. These reach a
+  # Dockerfile's FROM and RUN lines and an image tag.
+  if [ -n "$(input node_version_file)" ]; then
+    must_be_relative_path "node_version_file" "$(input node_version_file)"
+    node_version="$(git show "$sha:$(input node_version_file)" 2>/dev/null | head -1 | tr -d '[:space:]')" || node_version=""
+    [ -n "$node_version" ] || die "no node version in $(input node_version_file) at ${sha:0:12}"
+  else
+    node_version="$(input node_version)"
+  fi
+  node_version="${node_version#v}"
+  must_match "node version" "$node_version" '^[0-9]+(\.[0-9]+){0,2}$'
+  # pnpm/action-setup, given no version, reads package.json's packageManager.
+  pm="$(git show "$sha:package.json" 2>/dev/null | jq -r '.packageManager // ""')" || pm=""
+  [[ "$pm" =~ ^pnpm@([0-9]+\.[0-9]+\.[0-9]+)(\+.*)?$ ]] \
+    || die "package.json at ${sha:0:12} has no packageManager pnpm@<x.y.z> (it has '$pm'), which pnpm/action-setup needs as well"
+  pnpm_version="${BASH_REMATCH[1]}"
+
+  plan="$(jq -c --arg n "$job" --argjson c "$jcfg" --argjson i "$inputs" --arg nv "$node_version" --arg pv "$pnpm_version" \
+    '. + [{name: $n, kind: "node", cfg: $c, inputs: $i, node_version: $nv, pnpm_version: $pv}]' <<<"$plan")"
 }
 
 if jq -e 'has("jobs")' <<<"$cfg" >/dev/null; then
@@ -268,6 +317,7 @@ if jq -e 'has("jobs")' <<<"$cfg" >/dev/null; then
     uses="$(jq -r --arg j "$job" '.jobs[$j].uses // ""' <<<"$ci")"
     case "$uses" in
       */go-ci.yml@*) plan_go_job "$job" "$jcfg" ;;
+      */node-pnpm-ci.yml@*) plan_node_job "$job" "$jcfg" ;;
       "") die "ci.yml job '$job' is inline, and local-ci cannot run it yet (skip: <reason>)" ;;
       *) die "ci.yml job '$job' calls $uses, which local-ci cannot run yet (skip: <reason>)" ;;
     esac
@@ -314,6 +364,7 @@ cleanup() {
   state "done" "$rc" 2>/dev/null || true
   docker ps -aq --filter "label=local-ci.run=$ns" | xargs docker rm -f >/dev/null 2>&1 || true
   docker network ls -q --filter "label=local-ci.run=$ns" | xargs docker network rm >/dev/null 2>&1 || true
+  docker volume ls -q --filter "label=local-ci.run=$ns" | xargs docker volume rm >/dev/null 2>&1 || true
   rm -rf "$work"
 }
 trap cleanup EXIT
@@ -482,14 +533,11 @@ fetch_modules() { # for the job in $wd and $inputs; sets module_flags
   fi
 }
 
-# One go-ci job, from its plan entry ($job, $jcfg, $inputs, $wd, $go_version): its modules, its
-# image, its services on a network of its own, then its checks. Sets job_exit.
-run_go_job() {
-  local net="$ns-job-$job" name image ready ok after checks_image no_proxy=localhost,127.0.0.1
-  local names=() images=() aliases=() i
-  after="$(input after)"
+# A go-ci job ($wd, $go_version): its modules and its image. Sets checks_image and job_flags.
+prepare_go_job() {
   state modules
   fetch_modules
+  job_flags=(${module_flags[@]+"${module_flags[@]}"})
 
   state images
   checks_image="local-ci-checks:go$go_version-buf$(input buf)-sqlc$(input sqlc_version)-golangci$(input golangci_version)-vuln$(input govulncheck)"
@@ -499,9 +547,75 @@ run_go_job() {
     --build-arg GOVULNCHECK="$(input govulncheck)" -t "$checks_image" \
     -f "$shared/local-ci/checks.Dockerfile" "$shared/local-ci" >/dev/null \
     || die "could not build the checks image for Go $go_version"
+}
+
+# A node-pnpm-ci job ($node_version, $pnpm_version): its image, then its dependencies. Sets
+# checks_image and job_flags.
+#
+# Dependencies: a fetch container, given only the commit's manifests and lockfile and running
+# none of its code (node-fetch.sh), fills this repository's pnpm store, a Docker volume kept
+# between runs, through a proxy that allows only the npm registry. The checks then get a COPY
+# of that volume, made for this run and removed after it, and install offline. A copy because
+# pnpm opens its store's index for writing, so a read-only mount does not install, and a
+# shared writable one would let one commit's code change the packages a later run installs.
+prepare_node_job() {
+  local store="local-ci-pnpm-$repo_name" copy="$ns-pnpm-$job" fnet="$ns-fetch-$job" manifests
+  state images
+  checks_image="local-ci-node:node$node_version-pnpm$pnpm_version"
+  echo "local-ci: building the checks image for '$job' (Node $node_version, pnpm $pnpm_version)" >&2
+  docker build -q --build-arg NODE_VERSION="$node_version" --build-arg PNPM_VERSION="$pnpm_version" \
+    -t "$checks_image" -f "$shared/local-ci/node.Dockerfile" "$shared/local-ci" >/dev/null \
+    || die "could not build the checks image for Node $node_version, pnpm $pnpm_version"
+
+  state modules
+  echo "local-ci: fetching the npm packages of '$job' into the volume $store" >&2
+  echo "::: job $job: pnpm" >> "$out/modules.log"
+  must_match "repository name" "$repo_name" '^[A-Za-z0-9][A-Za-z0-9_.-]*$'
+  docker volume create --label "local-ci.pnpm=$repo_name" "$store" >/dev/null
+  docker run --rm --label "local-ci.run=$ns" --user 0 -v "$store:/pnpm" --entrypoint chown "$checks_image" node:node /pnpm
+  manifests="$work/manifests-$job"
+  # One path a line, unquoted: tar -T reads lines, and quotePath would escape non-ASCII names.
+  git -c core.quotePath=false ls-tree -r --name-only "$sha" \
+    | grep -E '(^|/)package\.json$|^pnpm-lock\.yaml$|^pnpm-workspace\.yaml$' \
+    | grep -Ev '(^|/)node_modules/' > "$manifests" || true
+  grep -qx 'pnpm-lock.yaml' "$manifests" || die "${sha:0:12} has no pnpm-lock.yaml, which a frozen install needs"
+  docker network create --internal --label "local-ci.run=$ns" "$fnet" >/dev/null
+  start_proxy "$fnet" "$fnet-proxy" "$shared/local-ci/npm-allow.txt" "$job"
+  if ! tar -C "$work/tree" -T "$manifests" -cf - | docker run --rm -i --label "local-ci.run=$ns" \
+    --label "local-ci.job=$job" --network "$fnet" -e HTTPS_PROXY=http://proxy:8888 -e HTTP_PROXY=http://proxy:8888 \
+    -v "$store:/pnpm" --entrypoint /opt/local-ci/node-fetch.sh "$checks_image" >> "$out/modules.log" 2>&1; then
+    docker logs "$fnet-proxy" >> "$out/modules.log" 2>&1 || true
+    tail -20 "$out/modules.log" >&2
+    die "could not fetch ${sha:0:12}'s npm packages (log: $out/modules.log)"
+  fi
+  docker rm -f "$fnet-proxy" >/dev/null 2>&1 || true
+  docker network rm "$fnet" >/dev/null 2>&1 || true
+
+  docker volume create --label "local-ci.run=$ns" "$copy" >/dev/null
+  docker run --rm --label "local-ci.run=$ns" --user 0 -v "$store:/s:ro" -v "$copy:/r" --entrypoint sh "$checks_image" \
+    -c 'cp -a /s/. /r/ && chown node:node /r' || die "could not copy the pnpm store for this run"
+  # ipv4first: with no IPv6 interface, as on these networks, getaddrinfo leaves ::1 out of
+  # `localhost`, while Node would still listen on ::1 for it, so a test that serves on
+  # localhost and fetches from it is refused (Foliot's packages/ui). GitHub's runners have
+  # IPv6, where both agree. Not IPv6 on the network instead: whether --internal holds for IPv6
+  # depends on the daemon's ip6tables setting. .local-ci.yml `env` can still set its own.
+  job_flags=(-v "$copy:/pnpm" -e pnpm_config_store_dir=/pnpm/store -e pnpm_config_cache_dir=/pnpm/cache
+    -e pnpm_config_offline=true -e CI=true -e NODE_OPTIONS=--dns-result-order=ipv4first)
+}
+
+# One job, from its plan entry ($job, $kind, $jcfg, $inputs and the kind's fields): its modules
+# and image, its services on a network of its own, then its checks. Sets job_exit.
+run_job() {
+  local net="$ns-job-$job" name image ready ok after checks_image no_proxy=localhost,127.0.0.1
+  local names=() images=() aliases=() job_flags=() i
+  after="$(input after)"
+  case "$kind" in
+    go) prepare_go_job ;;
+    node) prepare_node_job ;;
+  esac
 
   state checks
-  echo "local-ci: checks on ${sha:0:12}: ci.yml job '$job' (go-ci.yml), then ${after:-no after script} (log: $out/checks.log)" >&2
+  echo "local-ci: checks on ${sha:0:12}: ci.yml job '$job' ($kind), then ${after:-no after script} (log: $out/checks.log)" >&2
   mkdir -p "$work/checks-$job"
   cp -R "$work/tree" "$work/checks-$job/tree"
   printf '%s\n' "$inputs" > "$work/checks-$job/inputs.json"
@@ -551,7 +665,7 @@ run_go_job() {
   if tar -C "$work/checks-$job" -cf - . | docker run --rm -i --label "local-ci.run=$ns" \
     --label "local-ci.job=$job" --network "container:$net--pod" \
     -e SHA="$sha" -e HTTPS_PROXY=http://proxy:8888 -e HTTP_PROXY=http://proxy:8888 -e NO_PROXY="$no_proxy" \
-    ${module_flags[@]+"${module_flags[@]}"} ${env_flags[@]+"${env_flags[@]}"} \
+    ${job_flags[@]+"${job_flags[@]}"} ${env_flags[@]+"${env_flags[@]}"} \
     "$checks_image" >> "$out/checks.log" 2>&1; then
     job_exit=0
   else
@@ -562,6 +676,7 @@ run_go_job() {
   docker ps -aq --filter "label=local-ci.run=$ns" --filter "label=local-ci.job=$job" \
     | xargs docker rm -f >/dev/null 2>&1 || true
   docker network rm "$net" >/dev/null 2>&1 || true
+  docker volume ls -q --filter "label=local-ci.run=$ns" | xargs docker volume rm >/dev/null 2>&1 || true
   rm -rf "$work/checks-$job"
 }
 
@@ -580,11 +695,14 @@ for i in $(seq 0 $(($(jq length <<<"$plan") - 1))); do
   entry="$(jq -c --argjson i "$i" '.[$i]' <<<"$plan")"
   job="$(jq -r .name <<<"$entry")"
   jcfg="$(jq -c .cfg <<<"$entry")"
+  kind="$(jq -r .kind <<<"$entry")"
   inputs="$(jq -c .inputs <<<"$entry")"
-  wd="$(jq -r .wd <<<"$entry")"
-  go_version="$(jq -r .go_version <<<"$entry")"
+  wd="$(jq -r '.wd // ""' <<<"$entry")"
+  go_version="$(jq -r '.go_version // ""' <<<"$entry")"
+  node_version="$(jq -r '.node_version // ""' <<<"$entry")"
+  pnpm_version="$(jq -r '.pnpm_version // ""' <<<"$entry")"
   t0=$SECONDS
-  run_go_job
+  run_job
   checks_jobs="$(jq -c --arg n "$job" --argjson e "$job_exit" --argjson s "$((SECONDS - t0))" \
     '. + {($n): {exit: $e, seconds: $s}}' <<<"$checks_jobs")"
   if [ "$job_exit" -ne 0 ]; then
