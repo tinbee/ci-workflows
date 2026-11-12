@@ -25,7 +25,7 @@ running command ends; removing the containers ends it). confleet's Local CI page
 ## What runs
 
 **Checks: each go-ci.yml job, as the commit's own ci.yml calls it.** `go-checks.sh` runs
-go-ci's steps in go-ci's order (generate + drift check, lint, golangci-lint, gofmt, build, test
+go-ci's steps in go-ci's order (generate + drift check, lint, golangci-lint, gofmt, tidy, build, test
 with `-count=1`, govulncheck, post), with the inputs the commit's `ci.yml` passes over
 go-ci.yml's own defaults at `v1`. Then the job's `after` script, for what its `ci.yml` runs
 outside go-ci. One job at a time, in ci.yml's order, each in its own container with its own

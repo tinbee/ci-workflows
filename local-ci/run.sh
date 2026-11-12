@@ -215,6 +215,7 @@ plan_go_job() { # <ci.yml job> <its .local-ci.yml settings, as JSON>
   # These reach a Dockerfile's RUN lines (as build args), an image tag and git paths.
   must_match "buf" "$(input buf)" '^(true|false)$'
   must_match "govulncheck" "$(input govulncheck)" '^(true|false)$'
+  must_match "tidy_check" "$(input tidy_check)" '^(true|false)?$'
   must_match "sqlc_version" "$(input sqlc_version)" '^([0-9]+\.[0-9]+\.[0-9]+)?$'
   must_match "golangci_version" "$(input golangci_version)" '^(v[0-9]+(\.[0-9]+){0,2})?$'
   wd="$(input working_directory)"
@@ -422,7 +423,7 @@ host_go_env() { # <command...>: go on the host, fetching into the shared cache
     GONOPROXY='' GONOSUMDB='' GOINSECURE='' GOVCS='private:git,public:off' GOTOOLCHAIN=local "$@"
 }
 fetch_modules() { # for the job in $wd and $inputs; sets module_flags
-  local host_goprivate mods=() tools=() m k tool dir
+  local host_goprivate mods=() tools=() m k tool dir tidy_dir
   module_flags=()
   while IFS= read -r m; do
     [ -n "$m" ] || continue
@@ -443,7 +444,9 @@ fetch_modules() { # for the job in $wd and $inputs; sets module_flags
     tools+=("$tool")
   done < <(grep -oE 'go +(run|install) +(-[^[:space:]]+ +)*["'"'"']?[^[:space:]"'"'"'-][^[:space:]"'"'"']*@[^[:space:]);&|"'"'"']+' \
     "$work/commands.txt" | awk '{ print $NF }' | tr -d "\"'" | sort -u || true)
-  [ ${#mods[@]} -gt 0 ] || [ ${#tools[@]} -gt 0 ] || return 0
+  tidy_dir=""
+  [ "$(input tidy_check)" != true ] || tidy_dir="$wd"
+  [ ${#mods[@]} -gt 0 ] || [ ${#tools[@]} -gt 0 ] || [ -n "$tidy_dir" ] || return 0
 
   command -v go >/dev/null || die "go is not installed on the host, which fetches ${sha:0:12}'s modules"
   mkdir -p "$GOMODCACHE_HOST"
@@ -463,6 +466,14 @@ fetch_modules() { # for the job in $wd and $inputs; sets module_flags
     (cd "$work/tool" && host_go_env go mod init local-ci-tool && host_go_env go get "$tool") >> "$out/modules.log" 2>&1 \
       || { tail -20 "$out/modules.log" >&2; die "could not download $tool on the host (log: $out/modules.log)"; }
   done
+  # tidy_check: `go mod tidy` also loads the tests of every dependency's packages, so it needs
+  # modules `go mod download` leaves out (testify, for gokit's). Running it here fetches them.
+  # -diff writes nothing and runs no module code, and the verdict is the container's to give,
+  # so its exit is ignored: a module it could not fetch fails the container's run by name.
+  if [ -n "$tidy_dir" ]; then
+    echo "::: job $job: $tidy_dir (go mod tidy)" >> "$out/modules.log"
+    (cd "$work/tree/$tidy_dir" && host_go_env go mod tidy -diff) >> "$out/modules.log" 2>&1 || true
+  fi
   module_flags=(-v "$GOMODCACHE_HOST/cache/download:/goproxy:ro"
     -e GOPROXY=file:///goproxy -e GOSUMDB=off -e GOPRIVATE= -e GONOSUMDB=)
   # -mod=mod for an unvendored job only: in a vendored one it would bypass vendor/.
