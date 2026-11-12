@@ -7,9 +7,10 @@
 # otherwise send the repository out.
 #
 # Not .npmrc, which can name programs for pnpm to run (`git=`), and no file of this stays
-# executable: a manifest could otherwise be both the program and the thing it reads. What
-# pnpm-workspace.yaml configures is needed (packages, catalogs, overrides); it has no setting
-# that runs code with scripts and the pnpmfile off.
+# executable: a manifest could otherwise be both the program and the thing it reads.
+# pnpm-workspace.yaml is given, because the install needs what it configures (packages,
+# catalogs, overrides). Were any of it to run code anyway, this container holds only these
+# files, so they are all such code could send.
 #
 # stdin: a tar of the manifests (every package.json, pnpm-lock.yaml, pnpm-workspace.yaml).
 set -euo pipefail
