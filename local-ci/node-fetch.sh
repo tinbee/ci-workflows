@@ -38,15 +38,17 @@ if [ "${FETCH_NPM:-0}" = 1 ]; then
     echo "npm ci: ${lock#./}"
     (cd "$(dirname "$lock")" && npm ci "${npm_flags[@]}")
   done < <(find . -name package-lock.json -not -path '*/node_modules/*' -print0)
-  # name@range, for registry ranges only: workspace:, file:, link:, git and URL specs are not
-  # the registry's to resolve.
+  # name@range, allow-listed, since both come from the commit: a name npm would accept, and a
+  # semver range or dist-tag (workspace:, file:, link:, git and URL specs are not the
+  # registry's to resolve, and anything else could be read as an option). `--` as well.
   mapfile -t specs < <(find . -name package.json -not -path '*/node_modules/*' -print0 \
     | xargs -0 jq -r 'select((.private // false) != true and (.name // "") != "")
         | .dependencies // {} | to_entries[]
-        | select(.value | test("^(workspace:|file:|link:|git|https?:|github:)") | not)
+        | select(.key | test("^(@[a-z0-9][a-z0-9._~-]*/)?[a-z0-9][a-z0-9._~-]*$"))
+        | select(.value | type == "string" and test("^[0-9A-Za-z.*^~<>=| +-]+$"))
         | "\(.key)@\(.value)"' | sort -u)
   if [ "${#specs[@]}" -gt 0 ]; then
     echo "npm cache add: ${specs[*]}"
-    npm cache add "${specs[@]}" "${npm_flags[@]}"
+    npm cache add "${npm_flags[@]}" -- "${specs[@]}"
   fi
 fi
