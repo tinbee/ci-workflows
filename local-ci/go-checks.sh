@@ -9,6 +9,7 @@
 #                    `services` replace it.
 #   private modules  run.sh pre-fetches them on the host; this container reads them from a
 #                    read-only file proxy, checked against go.sum, and holds no credential.
+#                    The tools ci.yml `go run`s at a version come from the same proxy.
 #
 # stdin: a tar of tree/ (the files of $SHA) and inputs.json (go-ci's inputs, plus `after`).
 set -euo pipefail
