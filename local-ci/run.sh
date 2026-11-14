@@ -169,6 +169,20 @@ fi
 base="$(git merge-base "$base_ref" "$sha")" || die "no merge base between $base_ref and $sha"
 [ "$base" != "$sha" ] || die "$sha is already on $base_ref, so there is nothing to review (--base <ref> reviews a range)"
 
+# The branch the commit is on, recorded in state.json while it can still be named: once its PR
+# is squash-merged and the branch deleted, no ref contains the commit. The ref given, when it
+# is a local branch; else the checked-out branch, when HEAD is this commit; else the nearest
+# local branch (`name-rev`, so a commit behind the tip reads `<branch>~<n>`). Empty if none.
+branch=""
+if [ -n "${1:-}" ] && git show-ref --verify -q "refs/heads/$1"; then
+  branch="$1"
+elif [ "$sha" = "$(git rev-parse HEAD)" ]; then
+  branch="$(git branch --show-current)"
+fi
+if [ -z "$branch" ]; then
+  branch="$(git name-rev --name-only --no-undefined --refs='refs/heads/*' "$sha" 2>/dev/null)" || branch=""
+fi
+
 if [ "$sha" = "$(git rev-parse HEAD)" ] && [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   echo "local-ci: uncommitted changes are not part of ${sha:0:12} and are not checked" >&2
 fi
@@ -445,7 +459,9 @@ job=""
 state() { # <phase> [<exit code>]
   jq -n --arg sha "$sha" --arg base "$base" --arg phase "$1" --argjson pid "$$" --arg ns "$ns" \
     --arg started "$started" --arg at "$(date -u +%FT%TZ)" --arg exit "${2:-}" --arg job "$job" \
+    --arg branch "$branch" \
     '{sha: $sha, base: $base, pid: $pid, ns: $ns, phase: $phase, started: $started, updated: $at}
+     + (if $branch == "" then {} else {branch: $branch} end)
      + (if $job == "" then {} else {job: $job} end)
      + (if $exit == "" then {} else {exit: ($exit | tonumber), finished: $at} end)' \
     > "$out/state.json.tmp" && mv "$out/state.json.tmp" "$out/state.json"
