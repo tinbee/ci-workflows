@@ -143,7 +143,12 @@ replaces the login of every interactive `claude`.
    `*_command` input the workflow has, each with a one-line reason; not for an inline job.
 
    A ci.yml job missing from `jobs:`, or a `jobs:` entry ci.yml does not have, stops the run,
-   as does a `jobs:` whose every job is skipped. The first shape, with `ci_job`, `services`,
+   as does a `jobs:` whose every job is skipped, unless `.local-ci.yml` also says
+   `review_only: <reason>` at the top level. Then the run is the review alone: for a repo
+   whose checks cannot run here (the Terraform repos fetch private modules over SSH and run
+   `terraform init -upgrade` against the registry), the review still comes before the push
+   and CI keeps the checks. `review_only` with a job that would run stops the run, so it
+   never hides one. The first shape, with `ci_job`, `services`,
    `env` and `after` at the top level, still works: it runs that one go-ci job and does not
    look at the others.
 
