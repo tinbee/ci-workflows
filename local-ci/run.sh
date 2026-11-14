@@ -458,8 +458,23 @@ if jq -e 'has("jobs")' <<<"$cfg" >/dev/null; then
       *) die "ci.yml job '$job' calls $uses, which local-ci cannot run yet (skip: <reason>)" ;;
     esac
   done <<<"$ci_jobs"
-  [ "$(jq length <<<"$plan")" -gt 0 ] || die "every ci.yml job is skipped, so there is nothing to check"
+  # review_only: every job is CI-only (skip: <reason>) and the run is the review alone, for a
+  # repo whose checks cannot run here (the Terraform repos: private modules over SSH, and
+  # `terraform init -upgrade` against the registry). Only with every job skipped, so a job
+  # ci.yml gains still stops the run until it is listed, and a job that could run is not
+  # silently left out.
+  review_only=""
+  if jq -e 'has("review_only")' <<<"$cfg" >/dev/null; then
+    review_only="$(jq -r '.review_only | strings' <<<"$cfg")"
+    [[ -n "$review_only" && "$review_only" != *$'\n'* ]] || die ".local-ci.yml review_only needs a one-line reason"
+  fi
+  if [ "$(jq length <<<"$plan")" -eq 0 ]; then
+    [ -n "$review_only" ] || die "every ci.yml job is skipped, so there is nothing to check (review_only: <reason> runs the review alone)"
+  elif [ -n "$review_only" ]; then
+    die "review_only is set, but ci.yml job(s) $(jq -r 'map(.name) | join(", ")' <<<"$plan") would run; skip them, or drop review_only"
+  fi
 else
+  jq -e 'has("review_only") | not' <<<"$cfg" >/dev/null || die ".local-ci.yml review_only needs jobs: listing every ci.yml job as skip: <reason>"
   # The first shape: one go-ci job, its settings at the top level, other jobs unchecked.
   job="$(jq -r '.ci_job // ""' <<<"$cfg")"
   if [ -z "$job" ]; then
@@ -885,6 +900,7 @@ execute_job() {
 if [ "$skipped" != "{}" ]; then
   echo "local-ci: CI-only, not run here: $(jq -r 'to_entries | map("\(.key) (\(.value))") | join(", ")' <<<"$skipped")" >&2
 fi
+[ -z "${review_only:-}" ] || echo "local-ci: review only ($review_only); no checks run here" >&2
 parallel=1
 if [ "${LOCAL_CI_PARALLEL:-1}" = 0 ] || ((BASH_VERSINFO[0] < 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 1))); then
   parallel=0
@@ -904,7 +920,7 @@ load_entry() { # <index>: that plan entry's fields, as the job functions read th
   pnpm_version="$(jq -r '.pnpm_version // ""' <<<"$entry")"
 }
 # By index, not `while read`: anything in a job that read stdin would eat the remaining entries.
-for i in $(seq 0 $((n_jobs - 1))); do
+for ((i = 0; i < n_jobs; i++)); do
   load_entry "$i"
   prepare_job
 done
@@ -924,7 +940,7 @@ finish() { # <index>: that job's logs and exit, into the run's
     '. + {($n): ((if $e == "" then {error: "could not run", seconds: $s} else {exit: ($e | tonumber), seconds: $s} end)
                  + (if $si == {} then {} else {skipped_inputs: $si} end))}' <<<"$checks_jobs")"
 }
-for i in $(seq 0 $((n_jobs - 1))); do
+for ((i = 0; i < n_jobs; i++)); do
   load_entry "$i"
   job_t0+=("$SECONDS")
   names+=("$job")
