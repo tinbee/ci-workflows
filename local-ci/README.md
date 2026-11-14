@@ -22,7 +22,9 @@ A pre-push hook refuses a branch whose tip has not passed or been accepted
 While a run is going, `state.json` beside the result says where it is: `phase` (`preparing`,
 `modules`, `images`, `checks`, `review`, then `done` with `exit` and `finished`), plus the
 run's `pid` and `ns`, the label on every container and network it starts, and, from
-`modules` to `checks`, the ci.yml `job` being worked on. To cancel a run: TERM the pid
+`modules` to `checks`, the ci.yml `job` being worked on. `branch` is the branch the commit
+was on when the run started (`<branch>~<n>` behind its tip), kept for after a squash-merge
+deletes it and no ref names the commit any more. To cancel a run: TERM the pid
 and `docker rm -f` the containers labelled `local-ci.run=<ns>` (bash defers the TERM until the
 running command ends; removing the containers ends it). confleet's Local CI page reads these.
 
