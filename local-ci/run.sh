@@ -437,7 +437,7 @@ if jq -e 'has("jobs")' <<<"$cfg" >/dev/null; then
     # `go:` with nothing after it is null: no settings.
     jcfg="$(jq -c --arg j "$job" '.jobs[$j] // {}' <<<"$cfg")"
     jq -e 'type == "object"' <<<"$jcfg" >/dev/null || die "jobs.$job must be a map"
-    unknown="$(jq -r 'keys - ["after", "env", "services", "skip", "skip_inputs"] | join(", ")' <<<"$jcfg")"
+    unknown="$(jq -r 'keys - ["after", "env", "services", "skip", "skip_inputs", "base"] | join(", ")' <<<"$jcfg")"
     [ -z "$unknown" ] || die "jobs.$job: unknown key(s) $unknown"
     if jq -e 'has("skip")' <<<"$jcfg" >/dev/null; then
       reason="$(jq -r '.skip | strings' <<<"$jcfg")"
@@ -446,7 +446,28 @@ if jq -e 'has("jobs")' <<<"$cfg" >/dev/null; then
       skipped="$(jq -c --arg n "$job" --arg r "$reason" '. + {($n): $r}' <<<"$skipped")"
       continue
     fi
+    # A job-level `if:` is GitHub's to evaluate. One case has a local answer: a job that runs
+    # only on pull requests runs here, since a pre-push run stands for the pull request the
+    # commit becomes (instastack's api-compat). Any other condition stops the run rather than
+    # being ignored, which would run a main-only or tag-only job on every push.
+    jif="$(jq -r --arg j "$job" '.jobs[$j].if // "" | tostring' <<<"$ci")"
+    if [ -n "$jif" ]; then
+      norm="$(sed -E 's/^\$\{\{[[:space:]]*//; s/[[:space:]]*\}\}$//; s/[[:space:]]+/ /g' <<<"$jif")"
+      case "$norm" in
+        "github.event_name == 'pull_request'" | 'github.event_name == "pull_request"') ;;
+        *) die "ci.yml job '$job' runs only if: $jif, which only GitHub can evaluate (skip: <reason>)" ;;
+      esac
+    fi
+    # base: true gives an inline job the files of the base commit (the merge base the review
+    # diffs against) at ~/work/base, for a check that compares the change with what it changes,
+    # as api-compat compares openapi.yaml with the base's. Its sha is LOCAL_CI_BASE_SHA.
+    if jq -e 'has("base")' <<<"$jcfg" >/dev/null; then
+      jq -e '.base == true' <<<"$jcfg" >/dev/null || die "jobs.$job: base takes true (or leave it out)"
+    fi
     uses="$(jq -r --arg j "$job" '.jobs[$j].uses // ""' <<<"$ci")"
+    if [ -n "$uses" ] && jq -e 'has("base")' <<<"$jcfg" >/dev/null; then
+      die "jobs.$job: base is for an inline job; '$job' calls a workflow"
+    fi
     case "$uses" in
       */go-ci.yml@*) plan_go_job "$job" "$jcfg" ;;
       */node-pnpm-ci.yml@*) plan_node_job "$job" "$jcfg" ;;
@@ -806,6 +827,12 @@ prepare_job() {
     node) prepare_node_job ;;
     inline) prepare_inline_job ;;
   esac
+  # Exported here, once, not in execute_job: jobs execute side by side and export_tree uses
+  # one index file.
+  if [ "$(jq -r '.base // false' <<<"$jcfg")" = true ]; then
+    [ -d "$work/base-tree" ] || export_tree "$base" "$work/base-tree" || die "could not export the files of the base ${base:0:12}"
+    job_flags+=(-e "LOCAL_CI_BASE_SHA=$base")
+  fi
   printf '%s' "$checks_image" > "$work/image-$job"
   : > "$work/flags-$job"
   [ ${#job_flags[@]} -eq 0 ] || printf '%s\0' "${job_flags[@]}" > "$work/flags-$job"
@@ -826,6 +853,7 @@ execute_job() {
   echo "local-ci: checks on ${sha:0:12}: ci.yml job '$job' ($kind), then ${after:-no after script} (log: $out/checks.log)" >&2
   mkdir -p "$work/checks-$job"
   cp -R "$work/tree" "$work/checks-$job/tree"
+  [ "$(jq -r '.base // false' <<<"$jcfg")" != true ] || cp -R "$work/base-tree" "$work/checks-$job/base"
   printf '%s\n' "$inputs" > "$work/checks-$job/inputs.json"
   docker network create --internal --label "local-ci.run=$ns" "$net" >/dev/null
   start_proxy "$net" "$net-proxy" "$shared/local-ci/checks-allow.txt" "$job"
