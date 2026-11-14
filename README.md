@@ -6,7 +6,7 @@ Public so any org's repo can consume it. Reusable workflows in private repos can
 
 ## Where jobs run
 
-Every reusable workflow here except the two deploy workflows and `claude-review.yml` picks its machine the same way (`lint.yml` and `review.yml` are this repo's own checks, not reusable):
+Every reusable workflow here except the two deploy workflows and `claude-review.yml` picks its machine the same way (`ci.yml` and `review.yml` are this repo's own checks, not reusable):
 
 ```yaml
 runs-on: ${{ inputs.runs_on || vars.CI_RUNS_ON || 'ubuntu-latest' }}

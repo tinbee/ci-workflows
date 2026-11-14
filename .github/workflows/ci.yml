@@ -11,6 +11,11 @@ name: lint
 #
 # Required-status-check context: "lint". This job is not called through a
 # reusable workflow, so there is no "<caller> / " prefix.
+#
+# ci.yml, not lint.yml, because local-ci (scripts/local-ci.sh) reads this file:
+# the same job runs before a push, in an offline container. So nothing here
+# downloads at run time: actionlint is a pinned `go run`, whose module
+# local-ci fetches on the host first.
 
 on:
   push:
@@ -35,16 +40,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install actionlint
-        # Official download script — pins to a specific actionlint
-        # release without depending on a third-party action wrapper.
-        run: |
-          bash <(curl --proto '=https' --tlsv1.2 -sSf \
-            https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
-          ./actionlint -version
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27.4"
+          cache: false
 
+      # A pinned version (the download script this replaced took whatever
+      # was latest). actionlint runs shellcheck on `run:` blocks when it is on
+      # PATH: preinstalled on ubuntu-latest, and in local-ci's node image.
       - name: Run actionlint
-        run: ./actionlint -color
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color
 
       # jq and yq are preinstalled on ubuntu-latest. No network, no token: `gh` is
       # replaced by a fake inside the script.
