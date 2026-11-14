@@ -877,18 +877,18 @@ job="$(jq -r 'map(.name) | join(",")' <<<"$plan")"
 state checks
 pids=()
 names=()
-started=()
+job_t0=()
 finish() { # <index>: that job's logs and exit, into the run's
   local j="${names[$1]}" e=""
   { echo "::: job $j"; cat "$work/$j.checks.log" 2>/dev/null || true; } >> "$out/checks.log"
   { echo "::: job $j"; cat "$work/$j.proxy.log" 2>/dev/null || true; } >> "$out/checks-proxy.log"
   [ ! -f "$work/exit-$j" ] || e="$(cat "$work/exit-$j")"
-  checks_jobs="$(jq -c --arg n "$j" --arg e "$e" --argjson s "$((SECONDS - started[$1]))" \
+  checks_jobs="$(jq -c --arg n "$j" --arg e "$e" --argjson s "$((SECONDS - job_t0[$1]))" \
     '. + {($n): (if $e == "" then {error: "could not run", seconds: $s} else {exit: ($e | tonumber), seconds: $s} end)}' <<<"$checks_jobs")"
 }
 for i in $(seq 0 $((n_jobs - 1))); do
   load_entry "$i"
-  started+=("$SECONDS")
+  job_t0+=("$SECONDS")
   names+=("$job")
   (execute_job) &
   pids+=("$!")
