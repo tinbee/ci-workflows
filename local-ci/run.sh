@@ -289,7 +289,7 @@ skip_inputs_of() { # <ci.yml job> <its .local-ci.yml settings> <the workflow's i
   jq -c '.skip_inputs // {}' <<<"$2"
 }
 announce_skipped_inputs() { # <ci.yml job> <skip_inputs, as JSON>
-  jq -r --arg j "$1" 'to_entries[] | "local-ci: ci.yml job \($j): \(.key) not run here (\(.value)); CI runs it"' <<<"$2" >&2
+  jq -r --arg j "$1" 'to_entries[] | "local-ci: ci.yml job \($j): \(.key) left to CI (\(.value))"' <<<"$2" >&2
 }
 
 plan_go_job() { # <ci.yml job> <its .local-ci.yml settings, as JSON>
