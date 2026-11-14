@@ -724,6 +724,13 @@ fetch_packages() { # <pnpm: 0|1> <npm: 0|1>; adds to job_flags
   job_flags+=(-v "$copy:/pnpm" -e pnpm_config_store_dir=/pnpm/store -e pnpm_config_cache_dir=/pnpm/cache
     -e pnpm_config_offline=true -e npm_config_cache=/pnpm/npm -e npm_config_offline=true
     -e npm_config_update_notifier=false -e CI=true -e NODE_OPTIONS=--dns-result-order=ipv4first)
+  # pnpm 11 reads pnpm_config_*; pnpm 9 and 10 read only npm_config_* (`pnpm store path` with
+  # each prefix: 9.15 and 10.12 follow npm_config_, 11.0 follows pnpm_config_). Without these
+  # an older pnpm looks for its store in ~/.local/share/pnpm, finds nothing and, offline,
+  # fails. Not for pnpm 11, where npm, run by an inline job, would warn about the unknown keys.
+  if [ -n "$pnpm_version" ] && [ "${pnpm_version%%.*}" -lt 11 ]; then
+    job_flags+=(-e npm_config_store_dir=/pnpm/store -e npm_config_cache_dir=/pnpm/cache)
+  fi
 }
 
 # A node-pnpm-ci job ($node_version, $pnpm_version): its image, then its packages.
