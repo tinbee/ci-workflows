@@ -449,12 +449,13 @@ if jq -e 'has("jobs")' <<<"$cfg" >/dev/null; then
     # A job-level `if:` is GitHub's to evaluate. One case has a local answer: a job that runs
     # only on pull requests runs here, since a pre-push run stands for the pull request the
     # commit becomes (instastack's api-compat). Any other condition stops the run rather than
-    # being ignored, which would run a main-only or tag-only job on every push.
-    jif="$(jq -r --arg j "$job" '.jobs[$j].if // "" | tostring' <<<"$ci")"
+    # being ignored, which would run a main-only or tag-only job on every push. By presence, not
+    # with `//`: jq's `//` takes `false` for missing, so `if: false` would have run.
+    jif="$(jq -r --arg j "$job" '.jobs[$j] | if has("if") then (.if | tostring) else "" end' <<<"$ci")"
     if [ -n "$jif" ]; then
       norm="$(sed -E 's/^\$\{\{[[:space:]]*//; s/[[:space:]]*\}\}$//; s/[[:space:]]+/ /g' <<<"$jif")"
       case "$norm" in
-        "github.event_name == 'pull_request'" | 'github.event_name == "pull_request"') ;;
+        true | "github.event_name == 'pull_request'" | 'github.event_name == "pull_request"') ;;
         *) die "ci.yml job '$job' runs only if: $jif, which only GitHub can evaluate (skip: <reason>)" ;;
       esac
     fi

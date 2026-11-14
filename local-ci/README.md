@@ -45,8 +45,10 @@ the inputs it passes over the workflow's own defaults at `v1`:
   and under GitHub's command line for its `shell` (`bash -e` unnamed, `bash -eo pipefail` for
   `bash`, `sh -e`). Its setup actions choose the image: `actions/checkout`,
   `pnpm/action-setup` (pnpm from `packageManager`), `actions/setup-node` and `actions/setup-go`
-  (their version files or versions). Any other action, an `if:`, a `container:` or a matrix
+  (their version files or versions). Any other action, a step's `if:`, a `container:` or a matrix
   stops the run naming it, as do services ci.yml gives the job that `.local-ci.yml` does not.
+  A job-level `if:` stops it too, except `true` and `github.event_name == 'pull_request'`: a
+  pre-push run stands for the pull request the commit becomes, so a pull-request-only job runs.
 
 Then the job's `after` script, for what its `ci.yml` runs outside the workflow. The jobs are
 prepared one at a time (image, modules, packages), then run side by side, each in its own
