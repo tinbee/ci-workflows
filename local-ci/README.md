@@ -142,6 +142,12 @@ replaces the login of every interactive `claude`.
    empty, CI still runs it, and the result lists it under the job's `skipped_inputs`. Only a
    `*_command` input the workflow has, each with a one-line reason; not for an inline job.
 
+   `base: true` (an inline job only) gives the job the files of the base commit, the merge
+   base its review diffs against, read-only at `~/work/base`, with `LOCAL_CI_BASE_DIR` and
+   `LOCAL_CI_BASE_SHA` set: for a check that compares a change with what it changes, which
+   in CI would read git history the checks container does not have (instastack's api-compat
+   reads the base's `openapi.yaml` there in place of `git show`).
+
    A ci.yml job missing from `jobs:`, or a `jobs:` entry ci.yml does not have, stops the run,
    as does a `jobs:` whose every job is skipped, unless `.local-ci.yml` also says
    `review_only: <reason>` at the top level. Then the run is the review alone: for a repo
