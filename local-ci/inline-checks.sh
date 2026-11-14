@@ -5,7 +5,8 @@
 # as a GitHub runner runs them. The setup actions the job used chose this image's Node, pnpm and
 # Go; installs are offline, from the caches node-fetch.sh filled. Stops at the first failure.
 #
-# stdin: a tar of tree/ (the files of $SHA) and inputs.json ({steps: [{run, env, wd, shell}]}).
+# stdin: a tar of tree/ (the files of $SHA) and inputs.json ({steps: [{run, env, wd, shell}]}),
+# and base/ (the files of $LOCAL_CI_BASE_SHA) when .local-ci.yml gives the job `base: true`.
 set -euo pipefail
 
 in=/tmp/in
@@ -14,6 +15,13 @@ mkdir -p "$in"
 tar --warning=no-unknown-keyword -xf - -C "$in"
 
 mkdir -p ~/work
+# The base's files, read-only and outside the repo, for a step that compares with them
+# (instastack's api-compat reads LOCAL_CI_BASE_DIR in place of `git show <base>:<file>`).
+if [ -d "$in/base" ]; then
+  mv "$in/base" ~/work/base
+  chmod -R a-w ~/work/base
+  export LOCAL_CI_BASE_DIR="$HOME/work/base"
+fi
 mv "$in/tree" ~/work/repo
 cd ~/work/repo
 # A one-commit repository of exactly those files, so `git status --porcelain` and `git ls-files`

@@ -45,8 +45,10 @@ the inputs it passes over the workflow's own defaults at `v1`:
   and under GitHub's command line for its `shell` (`bash -e` unnamed, `bash -eo pipefail` for
   `bash`, `sh -e`). Its setup actions choose the image: `actions/checkout`,
   `pnpm/action-setup` (pnpm from `packageManager`), `actions/setup-node` and `actions/setup-go`
-  (their version files or versions). Any other action, an `if:`, a `container:` or a matrix
+  (their version files or versions). Any other action, a step's `if:`, a `container:` or a matrix
   stops the run naming it, as do services ci.yml gives the job that `.local-ci.yml` does not.
+  A job-level `if:` stops it too, except `true` and `github.event_name == 'pull_request'`: a
+  pre-push run stands for the pull request the commit becomes, so a pull-request-only job runs.
 
 Then the job's `after` script, for what its `ci.yml` runs outside the workflow. The jobs are
 prepared one at a time (image, modules, packages), then run side by side, each in its own
@@ -141,6 +143,12 @@ replaces the login of every interactive `claude`.
    `skip_inputs` is `skip:` for one step of a go-ci or node-pnpm-ci job: the input runs as
    empty, CI still runs it, and the result lists it under the job's `skipped_inputs`. Only a
    `*_command` input the workflow has, each with a one-line reason; not for an inline job.
+
+   `base: true` (an inline job only) gives the job the files of the base commit, the merge
+   base its review diffs against, read-only at `~/work/base`, with `LOCAL_CI_BASE_DIR` and
+   `LOCAL_CI_BASE_SHA` set: for a check that compares a change with what it changes, which
+   in CI would read git history the checks container does not have (instastack's api-compat
+   reads the base's `openapi.yaml` there in place of `git show`).
 
    A ci.yml job missing from `jobs:`, or a `jobs:` entry ci.yml does not have, stops the run,
    as does a `jobs:` whose every job is skipped, unless `.local-ci.yml` also says
