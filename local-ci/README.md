@@ -56,7 +56,8 @@ them one at a time instead. A job whose services or container could not start is
 `{error: "could not run"}` and the run exits 3. A job's services share its checks
 container's network namespace, so they are on `127.0.0.1` as a GitHub job's are, and also
 reachable by their names. `result.json` has each job under
-`checks.jobs`, as `{exit, seconds}` or `{skipped: <reason>}`. Not run locally:
+`checks.jobs`, as `{exit, seconds}` (with `skipped_inputs` when `.local-ci.yml` left steps
+out) or `{skipped: <reason>}`. Not run locally:
 
 - **`pre_command`**: CI's machine setup (woahbar and Foliot start Postgres with it).
   `.local-ci.yml` `services` replace it.
@@ -129,11 +130,17 @@ replaces the login of every interactive `claude`.
                                 # key whose env_json value is a ${{ }} expression (vars.X)
          APP_TEST_DATABASE_URL: postgres://app:app@postgres:5432/app_test?sslmode=disable
        after: scripts/integration-test.sh   # optional, from the repo root
-     web: {}                    # a node-pnpm-ci.yml job; the same settings apply
+     web:                       # a node-pnpm-ci.yml job; the same settings apply
+       skip_inputs:             # one of its workflow's *_command inputs stays CI-only
+         pre_check_command: needs the npm audit API
      smoke:                     # an inline job: its steps run; services and env as above
      e2e:
        skip: needs a browser    # stays CI-only; the reason goes in the result
    ```
+
+   `skip_inputs` is `skip:` for one step of a go-ci or node-pnpm-ci job: the input runs as
+   empty, CI still runs it, and the result lists it under the job's `skipped_inputs`. Only a
+   `*_command` input the workflow has, each with a one-line reason; not for an inline job.
 
    A ci.yml job missing from `jobs:`, or a `jobs:` entry ci.yml does not have, stops the run,
    as does a `jobs:` whose every job is skipped. The first shape, with `ci_job`, `services`,

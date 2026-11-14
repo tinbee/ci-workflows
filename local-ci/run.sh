@@ -273,13 +273,35 @@ pnpm_version_of() { # package.json's packageManager, which pnpm/action-setup rea
   printf '%s' "${BASH_REMATCH[1]}"
 }
 
+# .local-ci.yml `skip_inputs`: a command input of the job's workflow that cannot run here, each
+# with the reason, as `skip:` is for a whole job (envmesh's `pnpm audit` needs the npm audit
+# API, which the checks do not reach). CI still runs it; the result lists it under the job's
+# `skipped_inputs`. Only a `*_command` input the workflow has, so a typo stops the run rather
+# than skipping nothing. Taken out of ci.yml's `with` before anything reads it, so a skipped
+# command may also be one this could not evaluate.
+skip_inputs_of() { # <ci.yml job> <its .local-ci.yml settings> <the workflow's inputs, as JSON>
+  local job="$1" bad
+  jq -e '(.skip_inputs // {}) | type == "object"' <<<"$2" >/dev/null || die "jobs.$job.skip_inputs must be a map of <input>: <reason>"
+  bad="$(jq -r --argjson d "$3" '(.skip_inputs // {}) | keys | map(select((test("^[a-z_]+_command$") | not) or (. as $k | $d | has($k) | not))) | join(", ")' <<<"$2")"
+  [ -z "$bad" ] || die "jobs.$job.skip_inputs: $bad is not a command input of the workflow ci.yml job '$job' calls"
+  bad="$(jq -r '(.skip_inputs // {}) | to_entries | map(select((.value | type) != "string" or (.value | test("^\\s*$|[\n\r]")))) | map(.key) | join(", ")' <<<"$2")"
+  [ -z "$bad" ] || die "jobs.$job.skip_inputs: $bad needs a one-line reason"
+  jq -c '.skip_inputs // {}' <<<"$2"
+}
+announce_skipped_inputs() { # <ci.yml job> <skip_inputs, as JSON>
+  jq -r --arg j "$1" 'to_entries[] | "local-ci: ci.yml job \($j): \(.key) not run here (\(.value)); CI runs it"' <<<"$2" >&2
+}
+
 plan_go_job() { # <ci.yml job> <its .local-ci.yml settings, as JSON>
-  local job="$1" jcfg="$2" with after wd go_version
-  with="$(jq -c --arg j "$job" '.jobs[$j].with // {}' <<<"$ci")"
+  local job="$1" jcfg="$2" with after wd go_version skips
+  skips="$(skip_inputs_of "$job" "$jcfg" "$defaults")"
+  with="$(jq -c --arg j "$job" --argjson s "$skips" '.jobs[$j].with // {} | with_entries(select(.key as $k | $s | has($k) | not))' <<<"$ci")"
   refuse_expressions "$job" "$with" "$jcfg"
   after="$(jq -r '.after // ""' <<<"$jcfg")"
   [ -z "$after" ] || must_be_relative_path "after" "$after"
-  inputs="$(jq -c -n --argjson d "$defaults" --argjson w "$with" --arg after "$after" '$d + $w + {after: $after}')"
+  inputs="$(jq -c -n --argjson d "$defaults" --argjson w "$with" --arg after "$after" --argjson s "$skips" \
+    '$d + $w + {after: $after} + ($s | map_values(""))')"
+  announce_skipped_inputs "$job" "$skips"
 
   # These reach a Dockerfile's RUN lines (as build args), an image tag and git paths.
   must_match "buf" "$(input buf)" '^(true|false)$'
@@ -298,17 +320,20 @@ plan_go_job() { # <ci.yml job> <its .local-ci.yml settings, as JSON>
 }
 
 plan_node_job() { # <ci.yml job> <its .local-ci.yml settings, as JSON>
-  local job="$1" jcfg="$2" with after node_defaults node_version pnpm_version
+  local job="$1" jcfg="$2" with after node_defaults node_version pnpm_version skips
   local wf="$shared/.github/workflows/node-pnpm-ci.yml"
   [ -f "$wf" ] || die "ci.yml job '$job' calls node-pnpm-ci.yml, which this scripts/local-ci.sh does not extract; copy the current consumer-local-ci.sh from tinbee/ci-workflows local-ci/"
   node_defaults="$(yq -o json '.on.workflow_call.inputs | map_values(.default)' "$wf")"
+  skips="$(skip_inputs_of "$job" "$jcfg" "$node_defaults")"
   # Not the turbo remote cache's inputs: local-ci runs turbo without it, so whatever expression
   # ci.yml passes for them (`vars.TURBO_API`) has nothing here to stop.
-  with="$(jq -c --arg j "$job" '.jobs[$j].with // {} | del(.turbo_api, .turbo_team)' <<<"$ci")"
+  with="$(jq -c --arg j "$job" --argjson s "$skips" '.jobs[$j].with // {} | del(.turbo_api, .turbo_team) | with_entries(select(.key as $k | $s | has($k) | not))' <<<"$ci")"
   refuse_expressions "$job" "$with" "$jcfg"
   after="$(jq -r '.after // ""' <<<"$jcfg")"
   [ -z "$after" ] || must_be_relative_path "after" "$after"
-  inputs="$(jq -c -n --argjson d "$node_defaults" --argjson w "$with" --arg after "$after" '$d + $w + {after: $after}')"
+  inputs="$(jq -c -n --argjson d "$node_defaults" --argjson w "$with" --arg after "$after" --argjson s "$skips" \
+    '$d + $w + {after: $after} + ($s | map_values(""))')"
+  announce_skipped_inputs "$job" "$skips"
 
   node_version="$(node_version_of "$(input node_version_file)" "$(input node_version)")"
   pnpm_version="$(pnpm_version_of)"
@@ -412,7 +437,7 @@ if jq -e 'has("jobs")' <<<"$cfg" >/dev/null; then
     # `go:` with nothing after it is null: no settings.
     jcfg="$(jq -c --arg j "$job" '.jobs[$j] // {}' <<<"$cfg")"
     jq -e 'type == "object"' <<<"$jcfg" >/dev/null || die "jobs.$job must be a map"
-    unknown="$(jq -r 'keys - ["after", "env", "services", "skip"] | join(", ")' <<<"$jcfg")"
+    unknown="$(jq -r 'keys - ["after", "env", "services", "skip", "skip_inputs"] | join(", ")' <<<"$jcfg")"
     [ -z "$unknown" ] || die "jobs.$job: unknown key(s) $unknown"
     if jq -e 'has("skip")' <<<"$jcfg" >/dev/null; then
       reason="$(jq -r '.skip | strings' <<<"$jcfg")"
@@ -425,7 +450,11 @@ if jq -e 'has("jobs")' <<<"$cfg" >/dev/null; then
     case "$uses" in
       */go-ci.yml@*) plan_go_job "$job" "$jcfg" ;;
       */node-pnpm-ci.yml@*) plan_node_job "$job" "$jcfg" ;;
-      "") plan_inline_job "$job" "$jcfg" ;;
+      "")
+        # An inline job's steps are its own, not a workflow's inputs: skip the job, or move the
+        # step into a script it can leave out.
+        if jq -e 'has("skip_inputs")' <<<"$jcfg" >/dev/null; then die "jobs.$job: skip_inputs is for a job that calls go-ci.yml or node-pnpm-ci.yml; '$job' is inline"; fi
+        plan_inline_job "$job" "$jcfg" ;;
       *) die "ci.yml job '$job' calls $uses, which local-ci cannot run yet (skip: <reason>)" ;;
     esac
   done <<<"$ci_jobs"
@@ -891,7 +920,9 @@ finish() { # <index>: that job's logs and exit, into the run's
   { echo "::: job $j"; cat "$work/$j.proxy.log" 2>/dev/null || true; } >> "$out/checks-proxy.log"
   [ ! -f "$work/exit-$j" ] || e="$(cat "$work/exit-$j")"
   checks_jobs="$(jq -c --arg n "$j" --arg e "$e" --argjson s "$((SECONDS - job_t0[$1]))" \
-    '. + {($n): (if $e == "" then {error: "could not run", seconds: $s} else {exit: ($e | tonumber), seconds: $s} end)}' <<<"$checks_jobs")"
+    --argjson si "$(jq -c --arg n "$j" 'map(select(.name == $n))[0].cfg.skip_inputs // {}' <<<"$plan")" \
+    '. + {($n): ((if $e == "" then {error: "could not run", seconds: $s} else {exit: ($e | tonumber), seconds: $s} end)
+                 + (if $si == {} then {} else {skipped_inputs: $si} end))}' <<<"$checks_jobs")"
 }
 for i in $(seq 0 $((n_jobs - 1))); do
   load_entry "$i"
