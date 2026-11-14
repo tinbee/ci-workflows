@@ -1,0 +1,11 @@
+# local-ci (scripts/local-ci.sh): this repo's CI checks, then the cold-context review, run on a
+# commit before it is pushed. The runner is this repo's own local-ci/ at v1 (the released one,
+# not the commit's: a change to the runner is tested by running a consumer against it with
+# LOCAL_CI_RULES_REF). This file is only what .github/workflows/ci.yml cannot tell it.
+#
+# Every ci.yml job is listed: a job ci.yml gains stops the run until it is added here, so a
+# local pass always says which required checks it stands for.
+jobs:
+  # Inline in ci.yml: actionlint (a pinned `go run`, fetched on the host first; shellcheck from
+  # the node image) and rulesets/selftest.sh (jq, yq and a fake gh).
+  lint: {}
