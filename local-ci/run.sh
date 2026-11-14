@@ -224,6 +224,23 @@ input() { jq -r --arg k "$1" '.[$k] | if . == null then "" else tostring end' <<
 plan="[]"
 skipped="{}"
 
+# A job-level `if:` is GitHub's to evaluate. Two cases have a local answer: `true`, and a job
+# that runs only on pull requests, which runs here since a pre-push run stands for the pull
+# request the commit becomes (instastack's api-compat). Any other condition stops the run
+# rather than being ignored, which would run a main-only or tag-only job on every push. Both
+# config shapes call this, so neither can plan a job past it. By presence, not with `//`: jq's
+# `//` takes `false` for missing, so `if: false` would have run.
+refuse_job_if() { # <ci.yml job>
+  local jif norm
+  jif="$(jq -r --arg j "$1" '.jobs[$j] | if has("if") then (.if | tostring) else "" end' <<<"$ci")"
+  [ -n "$jif" ] || return 0
+  norm="$(sed -E 's/^\$\{\{[[:space:]]*//; s/[[:space:]]*\}\}$//; s/[[:space:]]+/ /g' <<<"$jif")"
+  case "$norm" in
+    true | "github.event_name == 'pull_request'" | 'github.event_name == "pull_request"') ;;
+    *) die "ci.yml job '$1' runs only if: $jif, which only GitHub can evaluate (skip: <reason>)" ;;
+  esac
+}
+
 # A `${{ }}` in what ci.yml passes the workflow is GitHub's to evaluate, not this script's: it
 # stops the run, naming the input. Except in env_json, where .local-ci.yml `env` (which wins
 # over env_json in any case) can give the variable a value: an expression there stops the run
@@ -446,19 +463,7 @@ if jq -e 'has("jobs")' <<<"$cfg" >/dev/null; then
       skipped="$(jq -c --arg n "$job" --arg r "$reason" '. + {($n): $r}' <<<"$skipped")"
       continue
     fi
-    # A job-level `if:` is GitHub's to evaluate. One case has a local answer: a job that runs
-    # only on pull requests runs here, since a pre-push run stands for the pull request the
-    # commit becomes (instastack's api-compat). Any other condition stops the run rather than
-    # being ignored, which would run a main-only or tag-only job on every push. By presence, not
-    # with `//`: jq's `//` takes `false` for missing, so `if: false` would have run.
-    jif="$(jq -r --arg j "$job" '.jobs[$j] | if has("if") then (.if | tostring) else "" end' <<<"$ci")"
-    if [ -n "$jif" ]; then
-      norm="$(sed -E 's/^\$\{\{[[:space:]]*//; s/[[:space:]]*\}\}$//; s/[[:space:]]+/ /g' <<<"$jif")"
-      case "$norm" in
-        true | "github.event_name == 'pull_request'" | 'github.event_name == "pull_request"') ;;
-        *) die "ci.yml job '$job' runs only if: $jif, which only GitHub can evaluate (skip: <reason>)" ;;
-      esac
-    fi
+    refuse_job_if "$job"
     # base: true gives an inline job the files of the base commit (the merge base the review
     # diffs against) at ~/work/base, for a check that compares the change with what it changes,
     # as api-compat compares openapi.yaml with the base's. Its sha is LOCAL_CI_BASE_SHA.
@@ -508,6 +513,7 @@ else
     */go-ci.yml@*) ;;
     *) die "ci.yml job '$job' does not call go-ci.yml" ;;
   esac
+  refuse_job_if "$job"
   plan_go_job "$job" "$(jq -c '{after, env, services} | with_entries(select(.value != null))' <<<"$cfg")"
 fi
 
