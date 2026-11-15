@@ -37,7 +37,7 @@ on:
         type: string
         default: ""
       destination_prefix:
-        description: "Key prefix inside the bucket to deploy under, with no leading or trailing slash (e.g. `portal`). The sync passes, their `--delete` and the content-type fixups all stay inside it, so several apps can share one bucket and each deploy on its own. Empty (the default) deploys to the bucket root. A root deploy that shares its bucket must name the other apps' prefixes in `sync_excludes` (e.g. `portal/*`), or its `--delete` removes them."
+        description: "Key prefix inside the bucket to deploy under, with no leading or trailing slash (e.g. `portal`). The sync passes, their `--delete` and the content-type fixups all stay inside it, so several apps can share one bucket and each deploy on its own. Empty (the default) deploys to the bucket root. A deploy whose destination contains another app's (the root, or `a` when another app deploys to `a/b`) must name that app's prefix in `sync_excludes` (e.g. `portal/*`), or its `--delete` removes that app's files."
         type: string
         default: ""
       content_type_fixups:

@@ -110,7 +110,7 @@ jobs:
 
 #### Several apps in one bucket
 
-One bucket and one distribution can hold several apps that deploy on their own: a public site at the root, a portal under `/portal/`, an admin app under `/admin/`. Each app's workflow passes its own `destination_prefix`, so its sync and its `--delete` cannot touch the others. The app at the root has no prefix, so it must exclude the others instead; `aws s3 sync` never deletes what an `--exclude` pattern matches.
+One bucket and one distribution can hold several apps that deploy on their own: a public site at the root, a portal under `/portal/`, an admin app under `/admin/`. Each app's workflow passes its own `destination_prefix`, and its sync and its `--delete` stay inside that prefix. That protects the other apps as long as no app's destination contains another's. The app at the root contains them all, so it must exclude them; `aws s3 sync` never deletes what an `--exclude` pattern matches. The same goes for nested prefixes: an app at `a` must exclude `b/*` when another deploys to `a/b`.
 
 ```yaml
 jobs:
