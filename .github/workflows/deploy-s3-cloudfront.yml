@@ -5,6 +5,8 @@ name: Deploy to S3 + CloudFront (reusable)
 # `cache_control_overrides` and `invalidation_paths` defaults below.
 # Legacy static-site consumers (root-served *.html, *.ics, etc.) should
 # explicitly pass empty cache overrides and `invalidation_paths: "/*"`.
+# Several apps can share one bucket, each deploying to its own
+# `destination_prefix`.
 #
 # Consumer repos call this with:
 #   uses: tinbee/ci-workflows/.github/workflows/deploy-s3-cloudfront.yml@v1
@@ -34,14 +36,18 @@ on:
         description: "Newline-separated list of S3 sync --exclude patterns."
         type: string
         default: ""
+      destination_prefix:
+        description: "Key prefix inside the bucket to deploy under, with no leading or trailing slash (e.g. `portal`). The sync passes, their `--delete` and the content-type fixups all stay inside it, so several apps can share one bucket and each deploy on its own. Empty (the default) deploys to the bucket root. A root deploy that shares its bucket must name the other apps' prefixes in `sync_excludes` (e.g. `portal/*`), or its `--delete` removes them."
+        type: string
+        default: ""
       content_type_fixups:
         description: 'JSON array of Content-Type overrides, re-uploaded after the sync (which guesses by extension — extensionless files get binary/octet-stream). Each entry is either {"ext":...} matching top-level files by extension, or {"path":...} naming one file by its path relative to source_dir (for nested/extensionless files like .well-known/apple-app-site-association). Example: [{"ext":".ics","content_type":"text/calendar; charset=utf-8","cache_control":"public, max-age=3600"},{"path":".well-known/apple-app-site-association","content_type":"application/json"}]'
         type: string
         default: ""
       invalidation_paths:
-        description: "Space-separated CloudFront invalidation paths. Default `/ /index.html` is the SPA pattern (hashed assets never need invalidating). Legacy static sites with root-served HTML/other files should pass `/*` to invalidate everything."
+        description: "Space-separated CloudFront invalidation paths. Empty (the default) means the SPA pattern for where this deploy lands (hashed assets never need invalidating): `/ /index.html`, or `/<destination_prefix>/index.html` when a prefix is set. Legacy static sites with root-served HTML/other files should pass `/*` to invalidate everything."
         type: string
-        default: "/ /index.html"
+        default: ""
       cache_control_overrides:
         description: 'JSON array of per-path-pattern Cache-Control overrides, applied as separate `aws s3 sync` passes before the default sync. Each entry: {"path_pattern":"assets/*","cache_control":"public, max-age=31536000, immutable"}. Default targets Vite/SPA hashed `assets/*` directory. Pass empty string to disable multi-pass sync entirely.'
         type: string
@@ -95,9 +101,27 @@ jobs:
           ROLE_TO_ASSUME: ${{ secrets.role_to_assume }}
           S3_BUCKET: ${{ secrets.s3_bucket }}
           CLOUDFRONT_DISTRIBUTION: ${{ secrets.cloudfront_distribution }}
+          DEST_PREFIX: ${{ inputs.destination_prefix }}
         run: |
           set -euo pipefail
           missing=0
+
+          # The prefix becomes part of an S3 key and of a `--delete`'s reach, so
+          # its shape is checked here rather than trusted: plain segments, no
+          # leading or trailing slash, no `.` or `..`. A stray slash would sync
+          # to `s3://bucket//...`, a different key from the one the CDN reads.
+          if [ -n "${DEST_PREFIX}" ]; then
+            if ! [[ "${DEST_PREFIX}" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]]; then
+              echo "::error::Input 'destination_prefix' must be path segments of letters, digits, '.', '_' or '-', separated by '/', with no leading or trailing slash. Got: ${DEST_PREFIX}"
+              missing=1
+            fi
+            case "/${DEST_PREFIX}/" in
+              */./* | */../*)
+                echo "::error::Input 'destination_prefix' must not contain a '.' or '..' segment. Got: ${DEST_PREFIX}"
+                missing=1
+                ;;
+            esac
+          fi
 
           if [ -z "${AWS_REGION_IN}" ]; then
             echo "::error::Input 'aws_region' is empty. Callers read it from the AWS_REGION repo variable (vars.AWS_REGION) — set that variable on the calling repo, usually via its Terraform module. A missing repo variable resolves to an empty string, which 'required: true' does not catch."
@@ -178,8 +202,15 @@ jobs:
           EXCLUDES: ${{ inputs.sync_excludes }}
           OVERRIDES: ${{ inputs.cache_control_overrides }}
           DEFAULT_CC: ${{ inputs.default_cache_control }}
+          DEST_PREFIX: ${{ inputs.destination_prefix }}
         run: |
           set -euo pipefail
+
+          # Where this deploy lands: the bucket root, or one app's prefix in a
+          # bucket several apps share. Every pass syncs to it, so --delete and
+          # the include/exclude patterns (which are relative to the source and
+          # the destination) never reach outside it.
+          dest="s3://${BUCKET}/${DEST_PREFIX:+${DEST_PREFIX}/}"
 
           # User-supplied --exclude patterns apply to EVERY sync pass
           # (override passes use them on top of their own --exclude "*").
@@ -203,7 +234,7 @@ jobs:
               pattern=$(echo "$OVERRIDES" | jq -r ".[$i].path_pattern")
               cc=$(echo "$OVERRIDES" | jq -r ".[$i].cache_control")
               echo "Override pass: pattern=$pattern cache_control=$cc"
-              aws s3 sync "$SOURCE" "s3://${BUCKET}/" --delete \
+              aws s3 sync "$SOURCE" "$dest" --delete \
                 "${user_excludes[@]}" \
                 --exclude "*" \
                 --include "$pattern" \
@@ -218,7 +249,7 @@ jobs:
             cc_flag=(--cache-control "$DEFAULT_CC")
           fi
           echo "Default pass: cache_control=${DEFAULT_CC:-<none>}"
-          aws s3 sync "$SOURCE" "s3://${BUCKET}/" --delete \
+          aws s3 sync "$SOURCE" "$dest" --delete \
             "${user_excludes[@]}" \
             "${override_excludes[@]}" \
             "${cc_flag[@]}"
@@ -230,8 +261,10 @@ jobs:
           BUCKET: ${{ secrets.s3_bucket }}
           SOURCE: ${{ inputs.source_dir }}
           FIXUPS: ${{ inputs.content_type_fixups }}
+          DEST_PREFIX: ${{ inputs.destination_prefix }}
         run: |
           set -euo pipefail
+          dest="s3://${BUCKET}/${DEST_PREFIX:+${DEST_PREFIX}/}"
           count=$(echo "$FIXUPS" | jq 'length')
           for i in $(seq 0 $((count - 1))); do
             ext=$(echo "$FIXUPS" | jq -r ".[$i].ext // empty")
@@ -250,7 +283,7 @@ jobs:
                 echo "::error::content_type_fixups path not found in ${SOURCE}: ${fpath}"
                 exit 1
               fi
-              aws s3 cp "$SOURCE/$fpath" "s3://${BUCKET}/$fpath" \
+              aws s3 cp "$SOURCE/$fpath" "${dest}${fpath}" \
                 --content-type "$ctype" \
                 "${extra[@]}" \
                 --metadata-directive REPLACE
@@ -259,7 +292,7 @@ jobs:
             shopt -s nullglob
             for f in "$SOURCE"/*"$ext"; do
               name=$(basename "$f")
-              aws s3 cp "$f" "s3://${BUCKET}/$name" \
+              aws s3 cp "$f" "${dest}${name}" \
                 --content-type "$ctype" \
                 "${extra[@]}" \
                 --metadata-directive REPLACE
@@ -271,8 +304,17 @@ jobs:
         env:
           DIST_ID: ${{ secrets.cloudfront_distribution }}
           PATHS: ${{ inputs.invalidation_paths }}
+          DEST_PREFIX: ${{ inputs.destination_prefix }}
         run: |
           set -euo pipefail
+          # No paths given: the app shell of wherever this deploy landed.
+          if [ -z "$PATHS" ]; then
+            if [ -n "$DEST_PREFIX" ]; then
+              PATHS="/${DEST_PREFIX}/index.html"
+            else
+              PATHS="/ /index.html"
+            fi
+          fi
           # shellcheck disable=SC2086  # PATHS is intentionally word-split for multiple invalidation paths
           INV_ID=$(aws cloudfront create-invalidation \
             --distribution-id "${DIST_ID}" \
