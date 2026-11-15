@@ -99,13 +99,38 @@ jobs:
 | `build_command`           | string  | `""`                                                                                    | Multi-line bash; skipped when empty.                                                                                                                              |
 | `source_dir`              | string  | `"dist/"`                                                                               | What to sync to S3.                                                                                                                                               |
 | `sync_excludes`           | string  | `""`                                                                                    | Newline-separated `--exclude` patterns (applies to every sync pass).                                                                                              |
+| `destination_prefix`      | string  | `""`                                                                                    | Key prefix in the bucket to deploy under (`portal`), no leading or trailing slash. Sync, `--delete` and fixups stay inside it. Empty deploys to the bucket root.  |
 | `cache_control_overrides` | string  | `'[{"path_pattern":"assets/*","cache_control":"public, max-age=31536000, immutable"}]'` | JSON array of per-pattern Cache-Control overrides. Each entry runs as a separate `aws s3 sync` pass before the default. Pass `""` to disable multi-pass entirely. |
 | `default_cache_control`   | string  | `"public, max-age=0, must-revalidate"`                                                  | Cache-Control for files NOT matched by any override. Pass `""` to omit the header (S3 default).                                                                   |
 | `content_type_fixups`     | string  | `""`                                                                                    | JSON array of per-extension Content-Type fixups. Each entry needs `ext`, `content_type`, optional `cache_control`. Runs after all sync passes.                    |
-| `invalidation_paths`      | string  | `"/ /index.html"`                                                                       | Space-separated CloudFront paths. SPA-friendly default. Pass `"/*"` for legacy static sites.                                                                      |
+| `invalidation_paths`      | string  | `""`                                                                                    | Space-separated CloudFront paths. Empty means the SPA pattern: `/ /index.html`, or `/<destination_prefix>/index.html` under a prefix. Pass `"/*"` for legacy static sites. |
 | `env_json`                | string  | `"{}"`                                                                                  | JSON object exported to `$GITHUB_ENV` before the build step. Use for `VITE_*` / `NEXT_PUBLIC_*` build-time config.                                                |
 | `aws_region`              | string  | required                                                                                | e.g. `us-east-1`. Pass via `vars.X` or hardcode — **NOT** `secrets.X` (the `with:` block forbids the secrets context).                                            |
 | `setup_pnpm`              | boolean | `true`                                                                                  | Whether to set up pnpm + pnpm cache. Set to `false` for consumers without `package.json` or `packageManager` field.                                               |
+
+#### Several apps in one bucket
+
+One bucket and one distribution can hold several apps that deploy on their own: a public site at the root, a portal under `/portal/`, an admin app under `/admin/`. Each app's workflow passes its own `destination_prefix`, and its sync and its `--delete` stay inside that prefix. That protects the other apps as long as no app's destination contains another's. The app at the root contains them all, so it must exclude them; `aws s3 sync` never deletes what an `--exclude` pattern matches. The same goes for nested prefixes: an app at `a` must exclude `b/*` when another deploys to `a/b`.
+
+```yaml
+jobs:
+  site: # the bucket root
+    uses: tinbee/ci-workflows/.github/workflows/deploy-s3-cloudfront.yml@v1
+    with:
+      source_dir: apps/site/dist/
+      sync_excludes: |
+        portal/*
+        admin/*
+      # ...
+  portal:
+    uses: tinbee/ci-workflows/.github/workflows/deploy-s3-cloudfront.yml@v1
+    with:
+      source_dir: apps/web/dist/ # built with base /portal/
+      destination_prefix: portal
+      # ...
+```
+
+`cache_control_overrides` and `content_type_fixups` paths stay relative to the app: `assets/*` under prefix `portal` is `portal/assets/*` in the bucket. Routing a path prefix to its app's `index.html` is the distribution's job (`tf-modules//aws/cloudfront-spa`, `spa_prefixes` and `spa_fallback_path`).
 
 #### Secrets
 
