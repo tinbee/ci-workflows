@@ -212,8 +212,8 @@ jobs:
           # the destination) never reach outside it.
           dest="s3://${BUCKET}/${DEST_PREFIX:+${DEST_PREFIX}/}"
 
-          # User-supplied --exclude patterns apply to EVERY sync pass
-          # (override passes use them on top of their own --exclude "*").
+          # User-supplied --exclude patterns apply to EVERY sync pass, and win
+          # over an override pass's own --include (see the order below).
           user_excludes=()
           if [ -n "$EXCLUDES" ]; then
             while IFS= read -r line; do
@@ -234,10 +234,15 @@ jobs:
               pattern=$(echo "$OVERRIDES" | jq -r ".[$i].path_pattern")
               cc=$(echo "$OVERRIDES" | jq -r ".[$i].cache_control")
               echo "Override pass: pattern=$pattern cache_control=$cc"
+              # The caller's excludes come LAST: the CLI applies filters in
+              # order and the later one wins, so placed before the include
+              # they would be re-selected by it (an include of `*.js` would
+              # reach an excluded `portal/app.js`), and this pass's --delete
+              # would then remove another app's files from a shared bucket.
               aws s3 sync "$SOURCE" "$dest" --delete \
-                "${user_excludes[@]}" \
                 --exclude "*" \
                 --include "$pattern" \
+                "${user_excludes[@]}" \
                 --cache-control "$cc"
               override_excludes+=(--exclude "$pattern")
             done
