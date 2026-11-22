@@ -339,7 +339,7 @@ jobs:
       - name: Private Go modules (App token)
         id: app-token
         if: steps.private.outputs.mode == 'app'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ inputs.private_module_app_client_id }}
           private-key: ${{ secrets.private_module_app_key }}
@@ -384,7 +384,7 @@ jobs:
       # else its go line. Later steps take its go-version output rather than reading
       # go.mod again, because not every setup-go reads the toolchain line.
       - id: go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version-file: ${{ inputs.working_directory }}/${{ inputs.go_version_file }}
           cache: ${{ inputs.goprivate == '' }}
