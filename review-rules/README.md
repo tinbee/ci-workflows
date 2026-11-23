@@ -32,7 +32,7 @@ twelve on a two-file diff wastes the budget that should go on the diff.
 | [`keyset-pagination-precision.md`](keyset-pagination-precision.md) | Any cursor-paginated list. In TypeScript plus Postgres a `Date`-derived cursor is lossy *by construction*, and the failure is silent omission. |
 | [`rate-limiting-architecture.md`](rate-limiting-architecture.md) | An internet-facing surface, or a login / token-mint / reveal / deploy endpoint. |
 | [`rest-adapter-design.md`](rest-adapter-design.md) | Code wrapping a third-party REST API or SDK. Skip it for a service that wraps nothing. |
-| [`app-boundaries.md`](app-boundaries.md) | A call into another Tin Bee app, its SDK or webhooks; or any change to a provider's contract or to a shared library (gokit, ci-workflows). |
+| [`app-boundaries.md`](app-boundaries.md) | A call into another Tin Bee app, its SDK or webhooks; or any change to a provider's contract or to a shared library (gokit, ci-workflows), including a default that retries, falls back or picks an outcome for the app. |
 
 ## What earns a rule its place here
 

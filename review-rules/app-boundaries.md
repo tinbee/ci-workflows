@@ -39,6 +39,30 @@ A consumer's need belongs in the library only when it reads as a sensible featur
 app in mind. Otherwise it belongs in the app, and the PR should say why it could not be
 made generic.
 
+## Shared libraries do the work; apps make the decisions
+
+A shared library does what it is asked once and returns the result or the error,
+unchanged. What to do about the result is the app's decision: retrying, backing off,
+falling back, failing open or closed, serving something stale. Flag a diff in a shared
+library that:
+
+- re-runs, retries or falls back by itself, or swallows an error, by default;
+- adds a policy default an app has to switch off (an option whose usual value is "off"
+  is the sign: `TxAttempts(1)` passed in a dozen places);
+- picks an outcome for a failure on the app's behalf (allow on store error, trust a
+  cached credential past its expiry) without the app having chosen it.
+
+Fine: guards that protect the library itself (refusing an invalid setting, bounding a
+read, a timeout on a call), classifiers that let the caller decide
+(`pgkit.Retryable(err)`), and a shared policy offered as an option the caller passes
+(`pgkit.TxRetries(n)`). The test: can a caller who reads only the function's name and
+arguments predict everything it does? If the honest answer needs "unless…", the library
+is deciding for the app.
+
+Source: gokit's `pgkit.Tx` re-ran the caller's function up to 5 times after a Postgres
+conflict, by default. Foliot opted out in 10 places and Instastack in 2, and two
+"decisions" reached the user that only existed because of the default (2026-11-23).
+
 ## Source
 
 Fleet rule set on 2026-11-19, generalised from the per-repo contract sections that
