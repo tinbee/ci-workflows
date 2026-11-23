@@ -59,6 +59,10 @@ read, a timeout on a call), classifiers that let the caller decide
 arguments predict everything it does? If the honest answer needs "unless…", the library
 is deciding for the app.
 
+A shared rate limiter is the worked case: rate-limiting-architecture.md wants requests to
+fail open on a store error, and that choice is made in the app's wiring (a required
+`OnStoreError` setting), not by the library's default.
+
 Source: gokit's `pgkit.Tx` re-ran the caller's function up to 5 times after a Postgres
 conflict, by default. Foliot opted out in 10 places and Instastack in 2, and two
 "decisions" reached the user that only existed because of the default (2026-11-23).

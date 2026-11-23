@@ -55,6 +55,13 @@ unreachable — but at request time, degrade to "unlimited" rather than
 "down".) The limiter protects against abuse; it must not become a new
 single point of failure on the hot path.
 
+**Where the choice lives.** Failing open is the service's decision, made in its own
+request path. A shared library's limiter (gokit `ratelimit`) does not pick it by default:
+it takes the failure mode as a required setting (`OnStoreError: ratelimit.FailOpen`), so the
+app states it where the limiter is wired. Review the app's wiring for fail-open, not the
+library's default (see `app-boundaries.md`, "Shared libraries do the work; apps make the
+decisions").
+
 ```ts
 try {
   const { allowed, retryAfter } = await consume(key, limit, windowMs);
@@ -104,7 +111,8 @@ try {
 ## Lint heuristic
 
 PR review: (1) is the global limiter mounted before auth? (2) is its
-store replica-safe? (3) does the request path fail open on store error?
+store replica-safe? (3) does the app's request path fail open on store error (for a
+shared limiter: does the app's wiring choose `FailOpen`)?
 (4) are login/mint/reveal endpoints individually capped? Any "no" is a
 finding.
 
