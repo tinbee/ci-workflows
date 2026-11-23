@@ -58,10 +58,10 @@ Fine: guards that protect the library itself (refusing an invalid setting, bound
 read, a timeout on a call), classifiers that let the caller decide
 (`pgkit.Retryable(err)`), and a required setting for an outcome that can only be
 decided inside the library, because the app's code is not running there (the rate
-limiter's answer when its store fails, how long a key cache trusts an expired key). The test, for anything that is not one of those guards: can a caller
-who reads only the function's name and arguments predict what it does after a failure?
-If the honest answer needs "unless…" (it runs your function again, it falls back, it
-swallows that error), the library is deciding for the app.
+limiter's answer when its store fails, how long a key cache trusts an expired key). The test, for anything not listed as fine: does the library return after one attempt,
+with the result or the error unchanged? If it can run the caller's work again, fall back
+or swallow the error, by default or because an option asked it to, the library is
+deciding for the app.
 
 A shared rate limiter is the worked case: rate-limiting-architecture.md wants requests to
 fail open on a store error, and that choice is made in the app's wiring (a required
