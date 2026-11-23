@@ -55,9 +55,10 @@ library that:
 Fine: guards that protect the library itself (refusing an invalid setting, bounding a
 read, a timeout on a call), classifiers that let the caller decide
 (`pgkit.Retryable(err)`), and a shared policy offered as an option the caller passes
-(`pgkit.TxRetries(n)`). The test: can a caller who reads only the function's name and
-arguments predict everything it does? If the honest answer needs "unless…", the library
-is deciding for the app.
+(`pgkit.TxRetries(n)`). The test, for anything that is not one of those guards: can a caller
+who reads only the function's name and arguments predict what it does after a failure?
+If the honest answer needs "unless…" (it runs your function again, it falls back, it
+swallows that error), the library is deciding for the app.
 
 A shared rate limiter is the worked case: rate-limiting-architecture.md wants requests to
 fail open on a store error, and that choice is made in the app's wiring (a required
