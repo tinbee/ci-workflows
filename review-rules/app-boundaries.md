@@ -46,7 +46,9 @@ unchanged. What to do about the result is the app's decision: retrying, backing 
 falling back, failing open or closed, serving something stale. Flag a diff in a shared
 library that:
 
-- re-runs, retries or falls back by itself, or swallows an error, by default;
+- re-runs, retries or falls back, or swallows an error, by default or as an option
+  (a `Retries(n)` option still has the library running the app's work again: the
+  app's own code should call again if it wants to);
 - adds a policy default an app has to switch off (an option whose usual value is "off"
   is the sign: `TxAttempts(1)` passed in a dozen places);
 - picks an outcome for a failure on the app's behalf (allow on store error, trust a
@@ -54,8 +56,9 @@ library that:
 
 Fine: guards that protect the library itself (refusing an invalid setting, bounding a
 read, a timeout on a call), classifiers that let the caller decide
-(`pgkit.Retryable(err)`), and a shared policy offered as an option the caller passes
-(`pgkit.TxRetries(n)`). The test, for anything that is not one of those guards: can a caller
+(`pgkit.Retryable(err)`), and a required setting for an outcome that can only be
+decided inside the library, because the app's code is not running there (the rate
+limiter's answer when its store fails, how long a key cache trusts an expired key). The test, for anything that is not one of those guards: can a caller
 who reads only the function's name and arguments predict what it does after a failure?
 If the honest answer needs "unless…" (it runs your function again, it falls back, it
 swallows that error), the library is deciding for the app.
@@ -66,7 +69,9 @@ fail open on a store error, and that choice is made in the app's wiring (a requi
 
 Source: gokit's `pgkit.Tx` re-ran the caller's function up to 5 times after a Postgres
 conflict, by default. Foliot opted out in 10 places and Instastack in 2, and two
-"decisions" reached the user that only existed because of the default (2026-11-23).
+"decisions" reached the user that only existed because of the default. A `TxRetries(n)`
+option replaced it for one release and was removed in v0.11.0: it still had gokit
+retrying the app's work (2026-11-23).
 
 ## Source
 
