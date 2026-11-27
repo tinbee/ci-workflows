@@ -7,5 +7,6 @@
 # local pass always says which required checks it stands for.
 jobs:
   # Inline in ci.yml: actionlint (a pinned `go run`, fetched on the host first; shellcheck from
-  # the node image) and rulesets/selftest.sh (jq, yq and a fake gh).
+  # the node image), rulesets/selftest.sh (jq, yq and a fake gh) and local-ci/selftest.sh
+  # (git, jq, yq and a fake docker).
   lint: {}
