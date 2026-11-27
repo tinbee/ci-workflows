@@ -43,8 +43,9 @@ cp "$ROOT/.github/workflows/go-ci.yml" "$ROOT/.github/workflows/node-pnpm-ci.yml
 # Every docker call run.sh makes succeeds and prints nothing, except:
 #   image inspect   an id from the tag and FAKE_IMAGE_SALT, so a test can change the image
 #   run -d          a container id
-#   run, checks     (the one given -e SHA=): reads the tar, appends "<sha> <job>" to ran.log, and
-#                   exits 1 when the tree has a file named FAIL.<job>
+#   run, checks     (the one given -e SHA=): reads the tar, appends "<sha> <job>" to ran.log and
+#                   its image to checks-images.log, and exits 1 when the tree has a file named
+#                   FAIL.<job>
 #   run, review     (the local-ci-review image): appends the sha to reviewed.log, keeps the
 #                   changed-file list, and answers as the review container does
 #   run -i, other   (the package fetch): reads its stdin
@@ -84,6 +85,7 @@ case "$sub" in
       d="$(mktemp -d)"
       tar -xf - -C "$d"
       echo "$sha $job" >>"$FAKE_STATE/ran.log"
+      echo "${!#}" >>"$FAKE_STATE/checks-images.log"
       bad="$(find "$d/tree" -name "FAIL.$job" | head -1)"
       rm -rf "$d"
       echo "fake checks for $job"
@@ -249,6 +251,8 @@ is "a job with inputs records its fingerprint" "$(result "$A" '.checks.jobs.back
 is "a job without inputs records none" "$(result "$A" '.checks.jobs.plain | has("fingerprint")')" false
 is "the same inputs, another job: another fingerprint" \
   "$(result "$A" '.checks.jobs.back.fingerprint != .checks.jobs.cmp.fingerprint')" true
+# By the id the fingerprint names, not by a tag another run could rebuild meanwhile.
+is "the checks run by image id" "$(grep -cv '^sha256:' "$FAKE_STATE/checks-images.log")" 0
 
 change "b: frontend only" frontend/app.txt
 B="$SHA"
@@ -339,6 +343,7 @@ change "m: elsewhere" other.txt
 M="$SHA"
 run_on "$M"
 expect_reused "a missing input still missing" "$M" back "$L"
+if grep -qF "inputs entry 'sdk' is not in ${M:0:12}" "$LOG"; then ok; else fail "a missing input is not named"; fi
 change "n: create sdk/" sdk/x.txt
 N="$SHA"
 run_on "$N"
@@ -439,6 +444,17 @@ expect_reused "the control" "$SHA" back "$X"
 # Nor is a commit's own earlier result reused: re-running X runs back again.
 run_on "$X"
 if [ "$(grep -cx "$X back" "$FAKE_STATE/ran.log")" -eq 2 ]; then ok; else fail "re-running X reused its own pass"; fi
+
+# A job none of whose inputs exist (a misspelt list) fingerprints nothing it reads: never reused.
+LOCAL_CI_YML="$(sed 's|back: { inputs: \[backend/, sdk/\] }|back: { inputs: [backnd/] }|' <<<"$LOCAL_CI_YML")"
+grep -qF 'inputs: [backnd/]' <<<"$LOCAL_CI_YML" || { echo "selftest: could not edit the config" >&2; exit 2; }
+change "all inputs missing" .local-ci.yml "$LOCAL_CI_YML"
+run_on "$SHA"
+expect_ran "no input exists" "$SHA" back
+change "all inputs missing, again" other.txt
+run_on "$SHA"
+expect_rc "no input exists, again" 0
+expect_ran "no input exists, again" "$SHA" back
 
 echo "selftest: $PASSED passed, $FAILED failed"
 [ "$FAILED" -eq 0 ]

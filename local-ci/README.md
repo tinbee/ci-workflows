@@ -194,13 +194,15 @@ passed, which needs every job to have passed or been reused.
 
 - each `inputs` path's git object at the commit (`git rev-parse <sha>:<path>`, a directory's
   tree or a file's blob); a path the commit does not have counts as missing, so creating it
-  runs the job;
+  runs the job. Each missing entry is named on stderr, since a misspelt one fingerprints
+  nothing, and a job none of whose entries exist is never reused;
 - the job's `after` script, when it has one;
 - `.local-ci.yml` and `.github/workflows/ci.yml`, whole: any change to either runs every job
   that has `inputs`;
 - every file of the ci-workflows checkout this run uses (`local-ci/`, `review/`,
   `review-rules/` and the workflows it extracts), so a new `v1` runs every job again;
-- the checks image's id, which changes with the job's Go, Node or pnpm version and its base image;
+- the checks image's id, which changes with the job's Go, Node or pnpm version and its base
+  image; the checks then run by that id, not by tag;
 - for a `base: true` job, the base commit's tree.
 
 **Only a pass is reused**: from another commit whose run's `status` is `pass`, in which the job

@@ -876,7 +876,19 @@ runner_fingerprint() { # every file under LOCAL_CI_SHARED, path and content, in 
   [ "$(wc -l < "$list")" -eq "$(wc -l < "$ids")" ] || die "could not fingerprint the ci-workflows files in $shared"
   paste "$list" "$ids" | git hash-object --stdin
 }
-job_fingerprint() { # for the loaded job, its image built ($checks_image)
+# An `inputs` entry the commit does not have is fingerprinted as missing, which is what makes
+# creating it run the job; but a misspelt one stays missing, and fingerprints nothing the job
+# reads. So each is named on stderr, and a job none of whose inputs exist is never reused.
+inputs_present() { # for the loaded job: 0 when at least one of its inputs is in the commit
+  local p any=1
+  while IFS= read -r p; do
+    if git cat-file -e "$sha:$p" 2>/dev/null; then any=0; else
+      echo "local-ci: ci.yml job '$job': inputs entry '$p' is not in ${sha:0:12}; fingerprinted as missing" >&2
+    fi
+  done < <(jq -r '.[]' <<<"$reuse_inputs")
+  return "$any"
+}
+job_fingerprint() { # for the loaded job, its image built ($checks_image, an image id)
   local p oid paths="{}" after after_oid="" base_tree="" local_ci ci image
   while IFS= read -r p; do
     oid="$(git rev-parse --verify -q "$sha:$p")" || oid=""
@@ -887,8 +899,7 @@ job_fingerprint() { # for the loaded job, its image built ($checks_image)
   if [ "$(jq -r '.base // false' <<<"$jcfg")" = true ]; then base_tree="$(git rev-parse "$base^{tree}")"; fi
   local_ci="$(git rev-parse "$sha:.local-ci.yml")"
   ci="$(git rev-parse "$sha:.github/workflows/ci.yml")"
-  image="$(docker image inspect -f '{{.Id}}' "$checks_image")" && [ -n "$image" ] \
-    || die "could not read the id of the image $checks_image"
+  image="$checks_image"
   jq -cnS --arg job "$job" --argjson inputs "$paths" --arg after "$after" --arg after_oid "$after_oid" \
     --arg local_ci "$local_ci" --arg ci "$ci" --arg runner "$runner_id" --arg image "$image" --arg base_tree "$base_tree" \
     '{v: 1, job: $job, inputs: $inputs, after: (if $after == "" then null else {path: $after, object: $after_oid} end),
@@ -923,16 +934,25 @@ reusable_pass() { # <fingerprint>
 # earlier pass of it had the same fingerprint it is not run: its modules and packages are not
 # fetched, and result.json records {exit: 0, seconds: 0, reused_from: <that sha>}.
 prepare_job() {
-  local checks_image job_flags=() fp from=""
+  local checks_image job_flags=() fp from="" tag
   case "$kind" in
     go) build_go_image ;;
     node | inline) build_node_image ;;
   esac
+  # By id from here on, so the checks run in the image the fingerprint names even if another
+  # run rebuilds the same tag in the meantime.
+  tag="$checks_image"
+  checks_image="$(docker image inspect -f '{{.Id}}' "$tag")" || checks_image=""
+  [ -n "$checks_image" ] || die "could not read the id of the image $tag"
   if [ "$reuse_inputs" != null ]; then
     [ -n "$runner_id" ] || runner_id="$(runner_fingerprint)"
     fp="$(job_fingerprint)"
     printf '%s' "$fp" > "$work/fingerprint-$job"
-    case "${LOCAL_CI_NO_REUSE:-}" in "" | 0) from="$(reusable_pass "$fp")" ;; esac
+    if ! inputs_present; then
+      echo "local-ci: ci.yml job '$job': none of its inputs is in ${sha:0:12}, so its fingerprint covers nothing it reads; it runs" >&2
+    else
+      case "${LOCAL_CI_NO_REUSE:-}" in "" | 0) from="$(reusable_pass "$fp")" ;; esac
+    fi
     if [ -n "$from" ]; then
       echo "local-ci: ci.yml job '$job': its inputs are as they were at ${from:0:12}, which passed it; reusing that pass (LOCAL_CI_NO_REUSE=1 runs it)" >&2
       printf '::: job %s\nnot run: the pass of %s is reused (fingerprint %s)\n' "$job" "$from" "$fp" >> "$out/checks.log"
