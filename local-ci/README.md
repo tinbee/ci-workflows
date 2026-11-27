@@ -214,7 +214,9 @@ on it stops the run.
 
 **Each entry** is a file or directory, relative to the repository root, with an optional
 trailing `/`. No globs, no absolute paths, no `.` or `..` components and no `//`: such an
-entry stops the run, as does an empty list. `inputs` goes under a job in `jobs:`.
+entry stops the run, as does an empty list, and an entry that is a symlink at the commit
+(whose object is the link, not its target: list the target). A symlink inside a listed
+directory is fingerprinted the same way, as the link, so its target must be listed too. `inputs` goes under a job in `jobs:`.
 
 **The risk is an incomplete list.** Nothing checks that `inputs` names everything a job reads.
 A job that also reads a file at the root it does not list (a shared `tsconfig.base.json`,

@@ -332,6 +332,11 @@ inputs_of() { # <ci.yml job> <its .local-ci.yml settings, as JSON>: the cleaned 
     p="${p%/}"
     must_be_relative_path "jobs.$job.inputs entry" "$p"
     case "/$p/" in */./* | *//*) die "jobs.$job.inputs entry '$p' must name a path inside the repository, without . or empty components" ;; esac
+    # A symlink's object is the link, not what it points to, so a change to the target would
+    # never change the fingerprint. --full-tree: the path is from the root, whatever the cwd.
+    if [ "$(git ls-tree --full-tree "$sha" -- "$p" | cut -d' ' -f1)" = 120000 ]; then
+      die "jobs.$job.inputs entry '$p' is a symlink at ${sha:0:12}; list the path it points to"
+    fi
     out="$(jq -c --arg p "$p" '. + [$p]' <<<"$out")"
   done < <(jq -r '.inputs[]' <<<"$2")
   jq -c 'unique' <<<"$out"

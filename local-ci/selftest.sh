@@ -237,6 +237,9 @@ refused "inputs with skip_inputs" \
   "$(printf 'jobs:\n  back: {}\n  web: { inputs: [frontend/], skip_inputs: { test_command: no } }\n  cmp: {}\n  plain: {}\n')" \
   "a job with skip_inputs always runs"
 refused "a top-level inputs beside jobs:" "$(printf 'inputs: [backend/]\n%s' "$(jobs_with '{}')")" "has jobs: and a top-level inputs"
+ln -s backend linked
+refused "a symlink" "$(jobs_with '{ inputs: [linked] }')" "jobs.back.inputs entry 'linked' is a symlink"
+git rm -q linked && git commit -qm "bad: no symlink"
 is "nothing ran for a refused config" "$(wc -l <"$FAKE_STATE/ran.log" | tr -d ' ')" 0
 git checkout -q feat
 
