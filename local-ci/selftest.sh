@@ -257,6 +257,8 @@ expect_rc "first run" 0
 for j in back web cmp plain; do expect_ran "first run" "$A" "$j"; done
 is "a job with inputs records its fingerprint" "$(result "$A" '.checks.jobs.back.fingerprint | test("^[0-9a-f]{40}$")')" true
 is "a job without inputs records none" "$(result "$A" '.checks.jobs.plain | has("fingerprint")')" false
+is "its components are kept beside the result" "\"$(git hash-object "$RESULTS/$A/fingerprint-back.json")\"" \
+  "$(result "$A" '.checks.jobs.back.fingerprint')"
 is "the same inputs, another job: another fingerprint" \
   "$(result "$A" '.checks.jobs.back.fingerprint != .checks.jobs.cmp.fingerprint')" true
 # By the id the fingerprint names, not by a tag another run could rebuild meanwhile.

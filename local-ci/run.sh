@@ -905,11 +905,14 @@ job_fingerprint() { # for the loaded job, its image built ($checks_image, an ima
   local_ci="$(git rev-parse "$sha:.local-ci.yml")"
   ci="$(git rev-parse "$sha:.github/workflows/ci.yml")"
   image="$checks_image"
+  # Kept beside the result, so a job that was not reused can be diffed against the run it was
+  # expected to reuse, component by component.
   jq -cnS --arg job "$job" --argjson inputs "$paths" --arg after "$after" --arg after_oid "$after_oid" \
     --arg local_ci "$local_ci" --arg ci "$ci" --arg runner "$runner_id" --arg image "$image" --arg base_tree "$base_tree" \
     '{v: 1, job: $job, inputs: $inputs, after: (if $after == "" then null else {path: $after, object: $after_oid} end),
       local_ci: $local_ci, ci: $ci, runner: $runner, image: $image,
-      base_tree: (if $base_tree == "" then null else $base_tree end)}' | git hash-object --stdin
+      base_tree: (if $base_tree == "" then null else $base_tree end)}' > "$out/fingerprint-$job.json"
+  git hash-object --stdin < "$out/fingerprint-$job.json"
 }
 
 # The newest other commit whose run PASSED (status `pass`: not fail-checks, fail-review, error,

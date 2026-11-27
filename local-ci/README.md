@@ -205,6 +205,10 @@ passed, which needs every job to have passed or been reused.
   image; the checks then run by that id, not by tag;
 - for a `base: true` job, the base commit's tree.
 
+Each run writes these components to `fingerprint-<job>.json` beside its `result.json`; the
+fingerprint is that file's git blob id. When a job ran that you expected to be reused, diff
+the file with the one from the commit it should have reused.
+
 **Only a pass is reused**: from another commit whose run's `status` is `pass`, in which the job
 itself ran (not reused, not skipped) and exited 0. Never from a failed job, a run whose other
 checks failed (`fail-checks`), a review that blocked (`fail-review`, and `accepted`, which
