@@ -925,8 +925,15 @@ job_fingerprint() { # for the loaded job, its image built ($checks_image, an ima
 # missing a step (skipped_inputs), not "could not run". Empty if there is none. These results
 # are this machine's own: the commit's code runs in containers that never see the git dir.
 reusable_pass() { # <fingerprint>
-  local f line best=""
+  local f line best="" files rc=0
+  # grep first, a cheap filter over every result: by -r, not a glob, which a long history of
+  # results would take past ARG_MAX. A file it could not read is named, and the rest still count.
+  files="$(grep -rlF --include=result.json -- "$1" "$results" 2>"$work/reuse-grep.err")" || rc=$?
+  if [ "$rc" -gt 1 ]; then
+    echo "local-ci: ci.yml job '$job': could not read every earlier result: $(head -1 "$work/reuse-grep.err")" >&2
+  fi
   while IFS= read -r f; do
+    [ -n "$f" ] || continue
     # A file that is not JSON, or is mid-write, is no pass to reuse.
     line="$(jq -r --arg j "$job" --arg fp "$1" --arg self "$sha" --arg dir "$(basename "$(dirname "$f")")" '
       select(.status == "pass" and .sha == $dir and .sha != $self)
@@ -934,7 +941,7 @@ reusable_pass() { # <fingerprint>
           and (has("reused_from") or has("skipped_inputs") or has("error") or has("skipped") | not))
       | "\(.created)\t\(.sha)"' "$f" 2>/dev/null)" || continue
     [ -z "$line" ] || [[ "$line" < "$best" ]] || best="$line"
-  done < <(grep -lF -- "$1" "$results"/*/result.json 2>/dev/null || true)
+  done <<<"$files"
   printf '%s' "${best#*$'\t'}"
 }
 

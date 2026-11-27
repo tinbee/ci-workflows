@@ -460,9 +460,13 @@ planted "a skip and exit 0" '.checks.jobs.back += {skipped: "planted"}'
 # The fingerprint is still in the file, under another job, so only the comparison excludes it.
 planted "another fingerprint" ".checks.jobs.web.fingerprint = .checks.jobs.back.fingerprint | .checks.jobs.back.fingerprint = \"$zero\""
 # Unplanted, the same kind of commit reuses X: the cases above differ from it in the entry alone.
+# With another result unreadable, which is named, and does not stop the search.
+chmod 000 "$RESULTS/$W/result.json"
 change "z: control" frontend/app.txt
 run_on "$SHA"
 expect_reused "the control" "$SHA" back "$X"
+if grep -qF "could not read every earlier result" "$LOG"; then ok; else fail "an unreadable result is not named"; fi
+chmod 644 "$RESULTS/$W/result.json"
 # Nor is a commit's own earlier result reused: re-running X runs back again.
 run_on "$X"
 if [ "$(grep -cx "$X back" "$FAKE_STATE/ran.log")" -eq 2 ]; then ok; else fail "re-running X reused its own pass"; fi
