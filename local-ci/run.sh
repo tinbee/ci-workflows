@@ -321,8 +321,8 @@ announce_skipped_inputs() { # <ci.yml job> <skip_inputs, as JSON>
 inputs_of() { # <ci.yml job> <its .local-ci.yml settings, as JSON>: the cleaned list, as JSON
   local job="$1" p out="[]"
   jq -e 'has("inputs")' <<<"$2" >/dev/null || { printf 'null'; return 0; }
-  jq -e '.inputs | type == "array" and length > 0 and all(type == "string")' <<<"$2" >/dev/null \
-    || die "jobs.$job.inputs must be a non-empty list of paths"
+  jq -e '.inputs | type == "array" and length > 0 and all(type == "string" and (test("\n") | not))' <<<"$2" >/dev/null \
+    || die "jobs.$job.inputs must be a non-empty list of paths, one line each"
   # A job with skip_inputs is never reused (its pass did not cover those steps), so inputs
   # would do nothing there; say so rather than accept a setting with no effect.
   if jq -e 'has("skip_inputs")' <<<"$2" >/dev/null; then

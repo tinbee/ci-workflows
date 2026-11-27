@@ -100,6 +100,10 @@ esac
 FAKE
 chmod +x "$WORK/bin/docker"
 export PATH="$WORK/bin:$PATH"
+# Only what each test sets: a LOCAL_CI_NO_REUSE or LOCAL_CI_PARALLEL the caller exported would
+# change what is being tested.
+unset LOCAL_CI_NO_REUSE LOCAL_CI_PARALLEL LOCAL_CI_MODEL LOCAL_CI_EFFORT LOCAL_CI_GOMODCACHE \
+  LOCAL_CI_RULES_REF LOCAL_CI_RULES_REPO FAKE_IMAGE_SALT FAKE_REVIEW_BLOCKING
 export LOCAL_CI_CLAUDE_TOKEN=fake LOCAL_CI_SHARED="$SHARED"
 
 # --- the consumer -------------------------------------------------------------------------------
@@ -231,6 +235,7 @@ refused "a ./ prefix" "$(jobs_with '{ inputs: [./backend] }')" "must name a path
 refused "an empty component" "$(jobs_with '{ inputs: [backend//x] }')" "must name a path inside the repository"
 refused "an empty list" "$(jobs_with '{ inputs: [] }')" "jobs.back.inputs must be a non-empty list"
 refused "a string" "$(jobs_with '{ inputs: backend/ }')" "jobs.back.inputs must be a non-empty list"
+refused "an entry with a newline" "$(jobs_with '{ inputs: ["backend\nfrontend"] }')" "jobs.back.inputs must be a non-empty list"
 refused "a non-string entry" "$(jobs_with '{ inputs: [1] }')" "jobs.back.inputs must be a non-empty list"
 refused "inputs with skip" "$(jobs_with '{ skip: CI only, inputs: [backend/] }')" "takes no other settings"
 refused "inputs with skip_inputs" \
