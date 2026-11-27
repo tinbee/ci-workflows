@@ -201,8 +201,9 @@ passed, which needs every job to have passed or been reused.
   that has `inputs`;
 - every file of the ci-workflows checkout this run uses (`local-ci/`, `review/`,
   `review-rules/` and the workflows it extracts), so a new `v1` runs every job again;
-- the checks image's id, which changes with the job's Go, Node or pnpm version and its base
-  image; the checks then run by that id, not by tag;
+- the checks image's layers and config, which change with the job's Go, Node or pnpm version
+  and its base image (not its id, which a rebuild that changes nothing can still change); the
+  checks run by the id read right after the build, not by tag;
 - for a `base: true` job, the base commit's tree.
 
 Each run writes these components to `fingerprint-<job>.json` beside its `result.json`; the

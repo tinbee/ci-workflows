@@ -41,7 +41,9 @@ cp "$ROOT/.github/workflows/go-ci.yml" "$ROOT/.github/workflows/node-pnpm-ci.yml
 
 # --- the fake ----------------------------------------------------------------------------------
 # Every docker call run.sh makes succeeds and prints nothing, except:
-#   image inspect   an id from the tag and FAKE_IMAGE_SALT, so a test can change the image
+#   image inspect   the content (layers and config) from the tag and FAKE_IMAGE_SALT, so a test
+#                   can change the image; and a NEW id on every `.Id` inspect, as Docker's
+#                   containerd image store gives a rebuild that changed nothing
 #   run -d          a container id
 #   run, checks     (the one given -e SHA=): reads the tar, appends "<sha> <job>" to ran.log and
 #                   its image to checks-images.log, and exits 1 when the tree has a file named
@@ -57,7 +59,17 @@ shift
 case "$sub" in
   image)
     [ "$1" = inspect ] || exit 0
-    printf 'sha256:%s\n' "$(printf '%s %s' "${!#}" "${FAKE_IMAGE_SALT:-}" | git hash-object --stdin)" ;;
+    ref="${!#}"
+    case "$ref" in
+      sha256:*) content="${ref#sha256:}" content="${content%.*}" ;; # an id this fake gave out
+      *) content="$(printf '%s %s' "$ref" "${FAKE_IMAGE_SALT:-}" | git hash-object --stdin)" ;;
+    esac
+    case "$*" in
+      *.Id*)
+        echo x >>"$FAKE_STATE/ids"
+        printf 'sha256:%s.%s\n' "$content" "$(wc -l <"$FAKE_STATE/ids" | tr -d ' ')" ;;
+      *) printf '["sha256:%s"] {} linux/arm64\n' "$content" ;;
+    esac ;;
   run)
     job="" sha="" interactive=0 detach=0 review=0
     for a in "$@"; do

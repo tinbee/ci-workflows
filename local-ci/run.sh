@@ -869,7 +869,9 @@ prepare_inline_job() {
 #   ci          .github/workflows/ci.yml's object, whole: the job and anything it could read
 #   runner      every file of the ci-workflows checkout this run uses (LOCAL_CI_SHARED): the
 #               scripts, Dockerfiles and workflow defaults, so a new v1 runs every job again
-#   image       the checks image's id, which changes with its toolchain versions and base image
+#   image       the checks image's layers and config, which change with its toolchain versions
+#               and base image. Not its id: with Docker's containerd image store, a rebuild that
+#               changes nothing (every layer cached) still gets a new id.
 #   base_tree   for a `base: true` job, the tree of the base it reads
 # What it cannot see is a file the job reads that `inputs` does not list; that is the risk an
 # `inputs` list carries, and why reuse is opt-in per job (local-ci/README.md).
@@ -904,7 +906,9 @@ job_fingerprint() { # for the loaded job, its image built ($checks_image, an ima
   if [ "$(jq -r '.base // false' <<<"$jcfg")" = true ]; then base_tree="$(git rev-parse "$base^{tree}")"; fi
   local_ci="$(git rev-parse "$sha:.local-ci.yml")"
   ci="$(git rev-parse "$sha:.github/workflows/ci.yml")"
-  image="$checks_image"
+  image="$(docker image inspect -f '{{json .RootFS.Layers}} {{json .Config}} {{.Os}}/{{.Architecture}}' "$checks_image")" \
+    && [ -n "$image" ] || die "could not read the image $checks_image"
+  image="$(git hash-object --stdin <<<"$image")"
   # Kept beside the result, so a job that was not reused can be diffed against the run it was
   # expected to reuse, component by component.
   jq -cnS --arg job "$job" --argjson inputs "$paths" --arg after "$after" --arg after_oid "$after_oid" \
