@@ -59,7 +59,9 @@ them one at a time instead. A job whose services or container could not start is
 container's network namespace, so they are on `127.0.0.1` as a GitHub job's are, and also
 reachable by their names. `result.json` has each job under
 `checks.jobs`, as `{exit, seconds}` (with `skipped_inputs` when `.local-ci.yml` left steps
-out) or `{skipped: <reason>}`. Not run locally:
+out, and `fingerprint` for a job with `inputs`), `{exit: 0, seconds: 0, reused_from: <sha>,
+fingerprint}` for a job whose earlier pass was reused (see [Reusing a pass](#reusing-a-pass-inputs)),
+or `{skipped: <reason>}`. Not run locally:
 
 - **`pre_command`**: CI's machine setup (woahbar and Foliot start Postgres with it).
   `.local-ci.yml` `services` replace it.
@@ -132,6 +134,7 @@ replaces the login of every interactive `claude`.
                                 # key whose env_json value is a ${{ }} expression (vars.X)
          APP_TEST_DATABASE_URL: postgres://app:app@postgres:5432/app_test?sslmode=disable
        after: scripts/integration-test.sh   # optional, from the repo root
+       inputs: [backend/, go.work]          # optional: reuse a pass while these are unchanged (below)
      web:                       # a node-pnpm-ci.yml job; the same settings apply
        skip_inputs:             # one of its workflow's *_command inputs stays CI-only
          pre_check_command: needs the npm audit API
@@ -166,3 +169,68 @@ replaces the login of every interactive `claude`.
 
 A node-pnpm-ci.yml job needs the consumer script from v1.28.0 on, which extracts that workflow
 too; an older copy stops with a message saying to update it.
+
+## Reusing a pass: `inputs`
+
+By default every job runs on every commit. A job given `inputs`, the paths it reads, is not run
+on a commit where none of what it depends on changed since a commit on which it passed:
+
+```yaml
+jobs:
+  backend:
+    inputs: [backend/, go.work, go.work.sum]
+  frontend:
+    inputs: [frontend/, package.json, pnpm-lock.yaml, pnpm-workspace.yaml, tsconfig.base.json]
+  e2e: {}                       # no inputs: runs every time, as before
+```
+
+A commit that changes only `frontend/` then runs `frontend` and reuses `backend`'s last pass,
+recorded in `result.json` as `{exit: 0, seconds: 0, reused_from: <sha>, fingerprint}`, so the
+result still says which commit's run stands behind it. The review is unchanged: it reads the
+whole diff, reused jobs or not. The pre-push hook is unchanged too: it passes a tip whose run
+passed, which needs every job to have passed or been reused.
+
+**What is fingerprinted.** A job is reused only when all of these match:
+
+- each `inputs` path's git object at the commit (`git rev-parse <sha>:<path>`, a directory's
+  tree or a file's blob); a path the commit does not have counts as missing, so creating it
+  runs the job. Each missing entry is named on stderr, since a misspelt one fingerprints
+  nothing, and a job none of whose entries exist is never reused;
+- the job's `after` script, when it has one;
+- `.local-ci.yml` and `.github/workflows/ci.yml`, whole: any change to either runs every job
+  that has `inputs`;
+- every file of the ci-workflows checkout this run uses (`local-ci/`, `review/`,
+  `review-rules/` and the workflows it extracts), so a new `v1` runs every job again;
+- the checks image's layers and config, which change with the job's Go, Node or pnpm version
+  and its base image (not its id, which a rebuild that changes nothing can still change); the
+  checks run by the id read right after the build, not by tag;
+- for a `base: true` job, the base commit's tree.
+
+Each run writes these components to `fingerprint-<job>.json` beside its `result.json`; the
+fingerprint is that file's git blob id. When a job ran that you expected to be reused, diff
+the file with the one from the commit it should have reused.
+
+**Only a pass is reused**: from another commit whose run's `status` is `pass`, in which the job
+itself ran (not reused, not skipped) and exited 0. Never from a failed job, a run whose other
+checks failed (`fail-checks`), a review that blocked (`fail-review`, and `accepted`, which
+overrides one), a run that could not finish (`error`, or a job that could not run), and never
+the commit's own earlier result. A job with `skip_inputs` never passed in full, so `inputs`
+on it stops the run.
+
+**Each entry** is a file or directory, relative to the repository root, with an optional
+trailing `/`. No globs, no absolute paths, no `.` or `..` components and no `//`: such an
+entry stops the run, as does an empty list, and an entry that is a symlink at the commit
+(whose object is the link, not its target: list the target). A symlink inside a listed
+directory is fingerprinted the same way, as the link, so its target must be listed too. `inputs` goes under a job in `jobs:`.
+
+**The risk is an incomplete list.** Nothing checks that `inputs` names everything a job reads.
+A job that also reads a file at the root it does not list (a shared `tsconfig.base.json`,
+`.golangci.yml`, `go.work`, the root `package.json` or lockfile, `.nvmrc`, a `Makefile`, a
+script under `scripts/`) is reused after that file changes, and the pass it reports is a pass
+of the old file. List the job's own directories and every root file its tool reads; when in
+doubt, list it, since an extra entry costs only a run that could have been reused. GitHub CI
+runs every job on the push regardless and stays the merge gate.
+
+**To run everything**: `LOCAL_CI_NO_REUSE=1 scripts/local-ci.sh` (or `make local-ci` with it set)
+runs every job, and still records the fingerprints, so later commits can reuse that run.
+Removing a job's `inputs` turns reuse off for that job.

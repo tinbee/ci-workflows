@@ -7,7 +7,8 @@ name: lint
 #   - shellcheck issues in inline `run:` blocks
 #
 # Also runs rulesets/selftest.sh: the group files, checks.json against the
-# workflows' real job names, and apply.sh against a fake `gh`.
+# workflows' real job names, and apply.sh against a fake `gh`. And
+# local-ci/selftest.sh: run.sh's reuse of a job's pass, against a fake `docker`.
 #
 # Required-status-check context: "lint". This job is not called through a
 # reusable workflow, so there is no "<caller> / " prefix.
@@ -35,7 +36,8 @@ jobs:
   lint:
     name: lint
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # The local-ci selftest runs run.sh about 50 times (80 s on an M-series Mac).
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -56,3 +58,9 @@ jobs:
       # replaced by a fake inside the script.
       - name: Ruleset selftest
         run: ./rulesets/selftest.sh
+
+      # run.sh's reuse of a job's pass (.local-ci.yml `inputs`), end to end
+      # against a throwaway repository. No network, no token, no Docker:
+      # `docker` is replaced by a fake inside the script. Needs git, jq, yq.
+      - name: local-ci selftest
+        run: ./local-ci/selftest.sh

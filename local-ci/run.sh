@@ -34,6 +34,7 @@
 #        where it would replace the login of every interactive `claude`.
 #      LOCAL_CI_MODEL (opus), LOCAL_CI_EFFORT (high): the review's model, as the label's.
 #      LOCAL_CI_GOMODCACHE (~/.cache/local-ci/gomod): where the host pre-fetches modules.
+#      LOCAL_CI_NO_REUSE=1: run every job, even one whose .local-ci.yml `inputs` match a pass.
 set -Eeuo pipefail
 # Any unplanned failure is "could not run". Without this, `set -e` exits with the failing
 # command's own status, and a 1 or 2 would read as "checks failed" or "blocking findings".
@@ -309,6 +310,38 @@ announce_skipped_inputs() { # <ci.yml job> <skip_inputs, as JSON>
   jq -r --arg j "$1" 'to_entries[] | "local-ci: ci.yml job \($j): \(.key) left to CI (\(.value))"' <<<"$2" >&2
 }
 
+# .local-ci.yml `inputs`: the paths a job reads, so that a commit leaving all of them (and what
+# defines the run, see fingerprint) as they were at a commit where the job passed reuses that
+# pass instead of running it again. Opt-in: a job without it always runs. Each entry is a file
+# or directory, relative to the repository root, and must match the same pattern as every other
+# path the commit names; no globs (`*` does not match it), no absolute path, no `.` or `..`
+# component, no `//`. A trailing `/` is allowed and dropped. A path the commit does not have is
+# fingerprinted as missing, so creating it runs the job. Validated here, with the rest of the
+# config, so a bad entry stops the run before anything is built.
+inputs_of() { # <ci.yml job> <its .local-ci.yml settings, as JSON>: the cleaned list, as JSON
+  local job="$1" p out="[]"
+  jq -e 'has("inputs")' <<<"$2" >/dev/null || { printf 'null'; return 0; }
+  jq -e '.inputs | type == "array" and length > 0 and all(type == "string" and (test("\n") | not))' <<<"$2" >/dev/null \
+    || die "jobs.$job.inputs must be a non-empty list of paths, one line each"
+  # A job with skip_inputs is never reused (its pass did not cover those steps), so inputs
+  # would do nothing there; say so rather than accept a setting with no effect.
+  if jq -e 'has("skip_inputs")' <<<"$2" >/dev/null; then
+    die "jobs.$job: a job with skip_inputs always runs, so inputs would do nothing; drop one of them"
+  fi
+  while IFS= read -r p; do
+    p="${p%/}"
+    must_be_relative_path "jobs.$job.inputs entry" "$p"
+    case "/$p/" in */./* | *//*) die "jobs.$job.inputs entry '$p' must name a path inside the repository, without . or empty components" ;; esac
+    # A symlink's object is the link, not what it points to, so a change to the target would
+    # never change the fingerprint. --full-tree: the path is from the root, whatever the cwd.
+    if [ "$(git ls-tree --full-tree "$sha" -- "$p" | cut -d' ' -f1)" = 120000 ]; then
+      die "jobs.$job.inputs entry '$p' is a symlink at ${sha:0:12}; list the path it points to"
+    fi
+    out="$(jq -c --arg p "$p" '. + [$p]' <<<"$out")"
+  done < <(jq -r '.inputs[]' <<<"$2")
+  jq -c 'unique' <<<"$out"
+}
+
 plan_go_job() { # <ci.yml job> <its .local-ci.yml settings, as JSON>
   local job="$1" jcfg="$2" with after wd go_version skips
   skips="$(skip_inputs_of "$job" "$jcfg" "$defaults")"
@@ -437,7 +470,7 @@ if jq -e 'has("jobs")' <<<"$cfg" >/dev/null; then
   # required checks it stands for. A job ci.yml gains is a stop here until it is listed.
   jq -e '.jobs | type == "object" and length > 0' <<<"$cfg" >/dev/null \
     || die ".local-ci.yml jobs: must map ci.yml job names to their settings"
-  for k in ci_job services env after; do
+  for k in ci_job services env after inputs; do
     if jq -e --arg k "$k" 'has($k)' <<<"$cfg" >/dev/null; then
       die ".local-ci.yml has jobs: and a top-level $k; with jobs:, $k goes under its job"
     fi
@@ -454,7 +487,7 @@ if jq -e 'has("jobs")' <<<"$cfg" >/dev/null; then
     # `go:` with nothing after it is null: no settings.
     jcfg="$(jq -c --arg j "$job" '.jobs[$j] // {}' <<<"$cfg")"
     jq -e 'type == "object"' <<<"$jcfg" >/dev/null || die "jobs.$job must be a map"
-    unknown="$(jq -r 'keys - ["after", "env", "services", "skip", "skip_inputs", "base"] | join(", ")' <<<"$jcfg")"
+    unknown="$(jq -r 'keys - ["after", "env", "services", "skip", "skip_inputs", "base", "inputs"] | join(", ")' <<<"$jcfg")"
     [ -z "$unknown" ] || die "jobs.$job: unknown key(s) $unknown"
     if jq -e 'has("skip")' <<<"$jcfg" >/dev/null; then
       reason="$(jq -r '.skip | strings' <<<"$jcfg")"
@@ -470,6 +503,7 @@ if jq -e 'has("jobs")' <<<"$cfg" >/dev/null; then
     if jq -e 'has("base")' <<<"$jcfg" >/dev/null; then
       jq -e '.base == true' <<<"$jcfg" >/dev/null || die "jobs.$job: base takes true (or leave it out)"
     fi
+    reuse_inputs="$(inputs_of "$job" "$jcfg")"
     uses="$(jq -r --arg j "$job" '.jobs[$j].uses // ""' <<<"$ci")"
     if [ -n "$uses" ] && jq -e 'has("base")' <<<"$jcfg" >/dev/null; then
       die "jobs.$job: base is for an inline job; '$job' calls a workflow"
@@ -484,6 +518,7 @@ if jq -e 'has("jobs")' <<<"$cfg" >/dev/null; then
         plan_inline_job "$job" "$jcfg" ;;
       *) die "ci.yml job '$job' calls $uses, which local-ci cannot run yet (skip: <reason>)" ;;
     esac
+    plan="$(jq -c --argjson r "$reuse_inputs" '.[-1].reuse_inputs = $r' <<<"$plan")"
   done <<<"$ci_jobs"
   # review_only: every job is CI-only (skip: <reason>) and the run is the review alone, for a
   # repo whose checks cannot run here (the Terraform repos: private modules over SSH, and
@@ -502,6 +537,7 @@ if jq -e 'has("jobs")' <<<"$cfg" >/dev/null; then
   fi
 else
   jq -e 'has("review_only") | not' <<<"$cfg" >/dev/null || die ".local-ci.yml review_only needs jobs: listing every ci.yml job as skip: <reason>"
+  jq -e 'has("inputs") | not' <<<"$cfg" >/dev/null || die ".local-ci.yml inputs needs jobs:, and goes under the job it is for"
   # The first shape: one go-ci job, its settings at the top level, other jobs unchecked.
   job="$(jq -r '.ci_job // ""' <<<"$cfg")"
   if [ -z "$job" ]; then
@@ -556,7 +592,8 @@ trap 'exit 130' INT
 state preparing
 
 # checks.exit and seconds.checks are the whole of the checks; checks.jobs has each ci.yml job
-# as {exit, seconds}, or {skipped: reason}. A job after a failed one is absent: it did not run.
+# as {exit, seconds}, or {skipped: reason}; a job with `inputs` also has its fingerprint, and
+# one whose earlier pass was reused is {exit: 0, seconds: 0, reused_from: <sha>, fingerprint}.
 checks_jobs="$(jq -c 'map_values({skipped: .})' <<<"$skipped")"
 #
 # A review the model answered also appends one line to <git common dir>/local-ci/costs.jsonl:
@@ -725,12 +762,9 @@ fetch_modules() { # for the job in $wd and $inputs; sets module_flags
   fi
 }
 
-# A go-ci job ($wd, $go_version): its modules and its image. Sets checks_image and job_flags.
-prepare_go_job() {
-  state modules
-  fetch_modules
-  job_flags=(${module_flags[@]+"${module_flags[@]}"})
-
+# A go-ci job's image ($go_version and its inputs). Sets checks_image. Built before its modules
+# are fetched, so a job whose pass is reused (prepare_job) fetches nothing.
+build_go_image() {
   state images
   checks_image="local-ci-checks:go$go_version-buf$(input buf)-sqlc$(input sqlc_version)-golangci$(input golangci_version)-vuln$(input govulncheck)"
   echo "local-ci: building the checks image for '$job' (Go $go_version)" >&2
@@ -805,16 +839,18 @@ fetch_packages() { # <pnpm: 0|1> <npm: 0|1>; adds to job_flags
   fi
 }
 
-# A node-pnpm-ci job ($node_version, $pnpm_version): its image, then its packages.
+# What a job needs beside its image, which prepare_job builds first. A go-ci job ($wd): its
+# modules. A node-pnpm-ci job: its packages. An inline job: its Go modules when it sets Go up,
+# then its npm packages, pnpm's and npm's both, since its own steps may run either.
+prepare_go_job() {
+  state modules
+  fetch_modules
+  job_flags+=(${module_flags[@]+"${module_flags[@]}"})
+}
 prepare_node_job() {
-  build_node_image
   fetch_packages 1 0
 }
-
-# An inline job: its image (the toolchains its setup actions name), its Go modules when it sets
-# Go up, then its npm packages, pnpm's and npm's both, since its own steps may run either.
 prepare_inline_job() {
-  build_node_image
   if [ -n "$go_version" ]; then
     state modules
     fetch_modules
@@ -824,11 +860,127 @@ prepare_inline_job() {
   job_flags+=(--entrypoint /opt/local-ci/inline-checks.sh)
 }
 
+# --- reuse: a job whose inputs are as they were at a commit where it passed -------------------
+# The fingerprint is everything that decides what the job's checks see and do, so that any
+# change to one of them runs the job:
+#   inputs      each .local-ci.yml `inputs` path's git object at the commit (null if absent)
+#   after       the `after` script's object, which .local-ci.yml names, so it is never left out
+#   local_ci    .local-ci.yml's object, whole: services, env, inputs and every other setting
+#   ci          .github/workflows/ci.yml's object, whole: the job and anything it could read
+#   runner      every file of the ci-workflows checkout this run uses (LOCAL_CI_SHARED): the
+#               scripts, Dockerfiles and workflow defaults, so a new v1 runs every job again
+#   image       the checks image's layers and config, which change with its toolchain versions
+#               and base image. Not its id: with Docker's containerd image store, a rebuild that
+#               changes nothing (every layer cached) still gets a new id.
+#   base_tree   for a `base: true` job, the tree of the base it reads
+# What it cannot see is a file the job reads that `inputs` does not list; that is the risk an
+# `inputs` list carries, and why reuse is opt-in per job (local-ci/README.md).
+runner_id=""
+runner_fingerprint() { # every file under LOCAL_CI_SHARED, path and content, in a fixed order
+  local list="$work/runner-files" ids="$work/runner-ids"
+  (cd "$shared" && find . -type f -print | LC_ALL=C sort > "$list" && git hash-object --stdin-paths < "$list" > "$ids") \
+    || die "could not fingerprint the ci-workflows files in $shared"
+  [ "$(wc -l < "$list")" -eq "$(wc -l < "$ids")" ] || die "could not fingerprint the ci-workflows files in $shared"
+  paste "$list" "$ids" | git hash-object --stdin
+}
+# An `inputs` entry the commit does not have is fingerprinted as missing, which is what makes
+# creating it run the job; but a misspelt one stays missing, and fingerprints nothing the job
+# reads. So each is named on stderr, and a job none of whose inputs exist is never reused.
+inputs_present() { # for the loaded job: 0 when at least one of its inputs is in the commit
+  local p any=1
+  while IFS= read -r p; do
+    if git cat-file -e "$sha:$p" 2>/dev/null; then any=0; else
+      echo "local-ci: ci.yml job '$job': inputs entry '$p' is not in ${sha:0:12}; fingerprinted as missing" >&2
+    fi
+  done < <(jq -r '.[]' <<<"$reuse_inputs")
+  return "$any"
+}
+job_fingerprint() { # for the loaded job, its image built ($checks_image, an image id)
+  local p oid paths="{}" after after_oid="" base_tree="" local_ci ci image
+  while IFS= read -r p; do
+    oid="$(git rev-parse --verify -q "$sha:$p")" || oid=""
+    paths="$(jq -c --arg p "$p" --arg o "$oid" '. + {($p): (if $o == "" then null else $o end)}' <<<"$paths")"
+  done < <(jq -r '.[]' <<<"$reuse_inputs")
+  after="$(input after)"
+  if [ -n "$after" ]; then after_oid="$(git rev-parse --verify -q "$sha:$after")" || after_oid=""; fi
+  if [ "$(jq -r '.base // false' <<<"$jcfg")" = true ]; then base_tree="$(git rev-parse "$base^{tree}")"; fi
+  local_ci="$(git rev-parse "$sha:.local-ci.yml")"
+  ci="$(git rev-parse "$sha:.github/workflows/ci.yml")"
+  image="$(docker image inspect -f '{{json .RootFS.Layers}} {{json .Config}} {{.Os}}/{{.Architecture}}' "$checks_image")" \
+    && [ -n "$image" ] || die "could not read the image $checks_image"
+  image="$(git hash-object --stdin <<<"$image")"
+  # Kept beside the result, so a job that was not reused can be diffed against the run it was
+  # expected to reuse, component by component.
+  jq -cnS --arg job "$job" --argjson inputs "$paths" --arg after "$after" --arg after_oid "$after_oid" \
+    --arg local_ci "$local_ci" --arg ci "$ci" --arg runner "$runner_id" --arg image "$image" --arg base_tree "$base_tree" \
+    '{v: 1, job: $job, inputs: $inputs, after: (if $after == "" then null else {path: $after, object: $after_oid} end),
+      local_ci: $local_ci, ci: $ci, runner: $runner, image: $image,
+      base_tree: (if $base_tree == "" then null else $base_tree end)}' > "$out/fingerprint-$job.json"
+  git hash-object --stdin < "$out/fingerprint-$job.json"
+}
+
+# The newest other commit whose run PASSED (status `pass`: not fail-checks, fail-review, error,
+# or a fail-review someone accepted) and in which this job itself ran and passed with the same
+# fingerprint: not skipped, not reused (the commit it reused from is found directly), not
+# missing a step (skipped_inputs), not "could not run". Empty if there is none. These results
+# are this machine's own: the commit's code runs in containers that never see the git dir.
+reusable_pass() { # <fingerprint>
+  local f line best="" files rc=0
+  # grep first, a cheap filter over every result: by -r, not a glob, which a long history of
+  # results would take past ARG_MAX. A file it could not read is named, and the rest still count.
+  files="$(grep -rlF --include=result.json -- "$1" "$results" 2>"$work/reuse-grep.err")" || rc=$?
+  if [ "$rc" -gt 1 ]; then
+    echo "local-ci: ci.yml job '$job': could not read every earlier result: $(head -1 "$work/reuse-grep.err")" >&2
+  fi
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    # A file that is not JSON, or is mid-write, is no pass to reuse.
+    line="$(jq -r --arg j "$job" --arg fp "$1" --arg self "$sha" --arg dir "$(basename "$(dirname "$f")")" '
+      select(.status == "pass" and .sha == $dir and .sha != $self)
+      | select(.checks.jobs[$j] | type == "object" and .fingerprint == $fp and .exit == 0
+          and (has("reused_from") or has("skipped_inputs") or has("error") or has("skipped") | not))
+      | "\(.created)\t\(.sha)"' "$f" 2>/dev/null)" || continue
+    [ -z "$line" ] || [[ "$line" < "$best" ]] || best="$line"
+  done <<<"$files"
+  printf '%s' "${best#*$'\t'}"
+}
+
 # A job's image, modules and packages, from its plan entry ($job, $kind and the kind's fields),
 # saved for execute_job: the image's name and the flags its container runs with. One job at a
 # time: the jobs of one repository share its package store, which the fetch writes.
+#
+# A job with .local-ci.yml `inputs` is fingerprinted once its image is built, and when an
+# earlier pass of it had the same fingerprint it is not run: its modules and packages are not
+# fetched, and result.json records {exit: 0, seconds: 0, reused_from: <that sha>}.
 prepare_job() {
-  local checks_image job_flags=()
+  local checks_image job_flags=() fp from="" tag
+  case "$kind" in
+    go) build_go_image ;;
+    node | inline) build_node_image ;;
+  esac
+  # By id from here on, so the checks run in the image the fingerprint names even if another
+  # run rebuilds the same tag in the meantime.
+  tag="$checks_image"
+  checks_image="$(docker image inspect -f '{{.Id}}' "$tag")" || checks_image=""
+  [ -n "$checks_image" ] || die "could not read the id of the image $tag"
+  if [ "$reuse_inputs" != null ]; then
+    [ -n "$runner_id" ] || runner_id="$(runner_fingerprint)"
+    fp="$(job_fingerprint)"
+    printf '%s' "$fp" > "$work/fingerprint-$job"
+    if ! inputs_present; then
+      echo "local-ci: ci.yml job '$job': none of its inputs is in ${sha:0:12}, so its fingerprint covers nothing it reads; it runs" >&2
+    else
+      case "${LOCAL_CI_NO_REUSE:-}" in "" | 0) from="$(reusable_pass "$fp")" ;; esac
+    fi
+    if [ -n "$from" ]; then
+      echo "local-ci: ci.yml job '$job': its inputs are as they were at ${from:0:12}, which passed it; reusing that pass (LOCAL_CI_NO_REUSE=1 runs it)" >&2
+      printf '::: job %s\nnot run: the pass of %s is reused (fingerprint %s)\n' "$job" "$from" "$fp" >> "$out/checks.log"
+      checks_jobs="$(jq -c --arg n "$job" --arg from "$from" --arg fp "$fp" \
+        '. + {($n): {exit: 0, seconds: 0, reused_from: $from, fingerprint: $fp}}' <<<"$checks_jobs")"
+      : > "$work/reused-$job"
+      return 0
+    fi
+  fi
   case "$kind" in
     go) prepare_go_job ;;
     node) prepare_node_job ;;
@@ -953,37 +1105,46 @@ load_entry() { # <index>: that plan entry's fields, as the job functions read th
   go_version="$(jq -r '.go_version // ""' <<<"$entry")"
   node_version="$(jq -r '.node_version // ""' <<<"$entry")"
   pnpm_version="$(jq -r '.pnpm_version // ""' <<<"$entry")"
+  reuse_inputs="$(jq -c '.reuse_inputs // null' <<<"$entry")"
 }
 # By index, not `while read`: anything in a job that read stdin would eat the remaining entries.
+# A job whose pass prepare_job reused is recorded there and not run below.
+to_run=""
 for ((i = 0; i < n_jobs; i++)); do
   load_entry "$i"
   prepare_job
+  [ -f "$work/reused-$job" ] || to_run="${to_run:+$to_run,}$job"
 done
 
-job="$(jq -r 'map(.name) | join(",")' <<<"$plan")"
+job="$to_run"
 state checks
 pids=()
 names=()
 job_t0=()
-finish() { # <index>: that job's logs and exit, into the run's
-  local j="${names[$1]}" e=""
+finish() { # <index into names>: that job's logs and exit, into the run's
+  local j="${names[$1]}" e="" fp=""
   { echo "::: job $j"; cat "$work/$j.checks.log" 2>/dev/null || true; } >> "$out/checks.log"
   { echo "::: job $j"; cat "$work/$j.proxy.log" 2>/dev/null || true; } >> "$out/checks-proxy.log"
   [ ! -f "$work/exit-$j" ] || e="$(cat "$work/exit-$j")"
-  checks_jobs="$(jq -c --arg n "$j" --arg e "$e" --argjson s "$((SECONDS - job_t0[$1]))" \
+  # Recorded for a job with inputs whether it passed or not; only a pass is ever reused.
+  [ ! -f "$work/fingerprint-$j" ] || fp="$(cat "$work/fingerprint-$j")"
+  checks_jobs="$(jq -c --arg n "$j" --arg e "$e" --argjson s "$((SECONDS - job_t0[$1]))" --arg fp "$fp" \
     --argjson si "$(jq -c --arg n "$j" 'map(select(.name == $n))[0].cfg.skip_inputs // {}' <<<"$plan")" \
     '. + {($n): ((if $e == "" then {error: "could not run", seconds: $s} else {exit: ($e | tonumber), seconds: $s} end)
-                 + (if $si == {} then {} else {skipped_inputs: $si} end))}' <<<"$checks_jobs")"
+                 + (if $si == {} then {} else {skipped_inputs: $si} end)
+                 + (if $fp == "" then {} else {fingerprint: $fp} end))}' <<<"$checks_jobs")"
 }
 for ((i = 0; i < n_jobs; i++)); do
   load_entry "$i"
+  [ ! -f "$work/reused-$job" ] || continue
   job_t0+=("$SECONDS")
   names+=("$job")
   (execute_job) &
   pids+=("$!")
   if [ "$parallel" = 0 ]; then
     wait "$!" || true
-    finish "$i"
+    # The index into names, which leaves out reused jobs, not into the plan.
+    finish "$((${#names[@]} - 1))"
   fi
 done
 if [ "$parallel" = 1 ]; then
@@ -1028,7 +1189,8 @@ if [ -n "$failed" ]; then
   exit 1
 fi
 job=""
-echo "local-ci: checks passed (${checks_s}s)" >&2
+reused="$(jq -r 'to_entries | map(select(.value.reused_from != null) | "\(.key) from \(.value.reused_from[:12])") | join(", ")' <<<"$checks_jobs")"
+echo "local-ci: checks passed (${checks_s}s${reused:+; reused: $reused})" >&2
 
 # --- review -----------------------------------------------------------------------------------
 state review
